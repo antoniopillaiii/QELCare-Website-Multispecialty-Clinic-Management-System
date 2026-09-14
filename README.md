@@ -17,7 +17,7 @@
 
 ## Overview
 
-**QELCare** is a production-oriented management system for a multispecialty outpatient clinic. It models the real operational flow of a clinic as an enforced state machine — a patient books an appointment, the front desk confirms it, a nurse takes vitals and routes the patient into the correct specialty queue, a doctor runs the consultation and records findings, and a cashier settles billing — while layering on AI document intelligence, role-based dashboards, and an audit trail over sensitive actions.
+**QELCare** is a production-oriented management system for a multispecialty outpatient clinic. It models the real operational flow of a clinic as an enforced state machine — a patient books an appointment, the Frontdesk confirms it, a nurse takes vitals and routes the patient into the correct specialty queue, a doctor runs the consultation and records findings, and a cashier settles billing — while layering on AI document intelligence, role-based dashboards, and an audit trail over sensitive actions.
 
 It is built **from scratch** with no ORM and no UI framework: the data layer is hand-written PostgreSQL (schema, functions, triggers, and versioned migrations) and the interface is a hand-built React design system. The result is a codebase that demonstrates end-to-end ownership of authentication, concurrency-safe workflows, third-party AI integration, and security hardening.
 
@@ -25,7 +25,7 @@ It is built **from scratch** with no ORM and no UI framework: the data layer is 
 
 ### Clinical workflow engine
 - **End-to-end appointment lifecycle** — `PENDING → CONFIRMED → IN_QUEUE → FOR_BILLING → COMPLETED`, with automatic no-show settlement and hourly sweeps that resolve stale, past-day queue entries so nothing gets stuck.
-- **Per-specialty patient queues** across 7 departments — Cardiology, Gastroenterology, Ob-Gyne, Pediatrics, Psychiatry, Rehabilitation Medicine, and ENT — each with its own nurse queue screen and lifecycle timestamps.
+- **Per-specialty patient queues** across 8 departments — Cardiology, Gastroenterology, General Medicine, Ob-Gyne, Pediatrics, Psychiatry, Rehabilitation Medicine, and ENT — each with its own nurse queue screen and lifecycle timestamps.
 - **Real-time lobby display** — an unauthenticated waiting-room screen that polls the queue every 10 seconds, rate-limited to survive public exposure.
 - **Nurse vitals capture** with database-trigger-computed BMI, linked to consultation records without duplicating data.
 - **Cashier & billing** with auto-generated official receipt numbers (`QEL-YYYY-NNNNN`), subtotals, and a full void/audit trail.
@@ -36,7 +36,7 @@ It is built **from scratch** with no ORM and no UI framework: the data layer is 
 - **Self-hosted AI analytics (Llama 3.2 via Ollama)** — locally generated analytics reports with model warm-up on boot, keep-alive, and a built-in fallback generator so reporting still works when the model is unreachable.
 
 ### Access, security & auditability
-- **Six clinic roles** — Admin, Doctor, Nurse, Receptionist (Front Desk), Cashier, and Patient — each with a dedicated dashboard and route guards on **both** the frontend and the API.
+- **Six clinic roles** — Admin, Doctor, Nurse, Frontdesk, Cashier, and Patient — each with a dedicated dashboard and route guards on **both** the frontend and the API.
 - **JWT authentication with active token revocation** — logout genuinely invalidates a token server-side, backed by bcrypt password hashing (12 rounds) and password-history reuse prevention.
 - **Layered abuse defense** — per-account login lockout and per-email OTP cooldown at the database layer, plus IP-based rate limits on auth, OTP, patient search, and the public display.
 - **Hardened HTTP** — Helmet security headers and a strict Content-Security-Policy (`script-src 'self'`, no `unsafe-inline`) on both the Express API and the Vercel-hosted frontend.
@@ -130,7 +130,7 @@ psql "$DATABASE_URL" -f schema.sql
 psql "$DATABASE_URL" -f functions.sql
 psql "$DATABASE_URL" -f seed.sql
 ```
-This seeds the roles, the 7 specialties, and a default admin account:
+This seeds the roles, the 8 specialties, and a default admin account:
 
 > **Default admin:** `admin` / `Admin@12345` — **change this immediately on first login.**
 
@@ -178,7 +178,7 @@ The app is now at **http://localhost:3000**, talking to the API at **http://loca
 | **Admin** | User management, appointments, billing oversight, analytics reports, activity logs |
 | **Doctor** | Consultations, medical records, medication approvals |
 | **Nurse** | Vitals capture, routing patients into specialty queues |
-| **Receptionist (Front Desk)** | Appointment confirmation, rescheduling, patient management, inquiries |
+| **Frontdesk** | Appointment confirmation, rescheduling, patient management, inquiries |
 | **Cashier** | Billing and receipt issuance |
 | **Patient** | Booking, appointment history, medical records, and health documents |
 
