@@ -382,7 +382,7 @@ function UserModal({ user, roles, specialties, mode, onClose, onSave, saving }) 
         padding: 22,
       }}
     >
-      <div style={{ width: "min(720px, 100%)", maxHeight: "88vh", overflow: "hidden", background: "#fff", borderRadius: 16, boxShadow: "0 24px 70px rgba(15,23,42,.28)" }}>
+      <div style={{ width: "min(720px, 100%)", maxHeight: "88vh", display: "flex", flexDirection: "column", overflow: "hidden", background: "#fff", borderRadius: 16, boxShadow: "0 24px 70px rgba(15,23,42,.28)" }}>
         <div style={{ padding: "18px 22px", background: C.blue, color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
           <div>
             <div style={{ fontSize: 18, fontWeight: 900 }}>{isView ? "View User" : isEdit ? "Edit User" : "Add User"}</div>
@@ -393,7 +393,7 @@ function UserModal({ user, roles, specialties, mode, onClose, onSave, saving }) 
           </button>
         </div>
 
-        <div style={{ padding: 24, background: "#fafbfd", maxHeight: "calc(88vh - 74px)", overflowY: "auto" }}>
+        <div style={{ padding: 24, background: "#fafbfd", flex: 1, minHeight: 0, overflowY: "auto" }}>
           {error && (
             <div style={{ marginBottom: 16, padding: "12px 14px", borderRadius: 10, background: "#fff2f4", color: C.danger, border: "1px solid #f7c5cb", fontSize: 13, fontWeight: 700 }}>
               {error}
@@ -418,7 +418,7 @@ function UserModal({ user, roles, specialties, mode, onClose, onSave, saving }) 
                 <ReadOnly label="Joined" value={formatDate(user.created_at, true)} />
                 <ReadOnly label="Last Login" value={formatDate(user.last_login, true)} />
               </div>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, position: "sticky", bottom: 0, margin: "0 -24px -24px", padding: "16px 24px", background: "#fafbfd", borderTop: `1px solid ${C.border}` }}>
                 <Button onClick={onClose}>Close</Button>
               </div>
             </div>
@@ -507,7 +507,7 @@ function UserModal({ user, roles, specialties, mode, onClose, onSave, saving }) 
                 )}
               </div>
 
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, position: "sticky", bottom: 0, margin: "0 -24px -24px", padding: "16px 24px", background: "#fafbfd", borderTop: `1px solid ${C.border}` }}>
                 <Button onClick={onClose} disabled={saving}>Cancel</Button>
                 <Button variant="primary" type="submit" disabled={saving}>{saving ? "Saving..." : isEdit ? "Update User" : "Create User"}</Button>
               </div>
