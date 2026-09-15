@@ -560,7 +560,7 @@ router.get("/dashboard", async (req, res) => {
         JOIN users u ON a.doctor_id = u.user_id
         LEFT JOIN specialties s ON a.specialty_id = s.specialty_id
         WHERE a.date = CURRENT_DATE
-          AND a.status IN ('PENDING','CONFIRMED','COMPLETED')
+          AND a.status IN ('PENDING','CONFIRMED','IN_QUEUE','COMPLETED','NO_SHOW','CANCELLED')
         ORDER BY a.time ASC
         LIMIT 60
       `),
