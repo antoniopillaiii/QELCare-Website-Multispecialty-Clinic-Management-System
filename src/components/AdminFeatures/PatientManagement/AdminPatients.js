@@ -3,6 +3,7 @@ import MainLayout from "../../Layout/MainLayout";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C } from "../../../utils/adminTheme";
+import ConfirmModal from "../../common/ConfirmModal";
 
 const EXPORT_COLUMNS = [
   { header: "Patient ID", value: (patient) => `#${patient.id}` },
@@ -407,6 +408,7 @@ export default function AdminPatients() {
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const [page, setPage] = useState(1);
   const [modal, setModal] = useState(null);
+  const [confirm, setConfirm] = useState(null);
 
   const showAlert = useCallback((type, message) => {
     setAlert({ type, message });
@@ -498,11 +500,19 @@ export default function AdminPatients() {
     }
   };
 
-  const toggleActive = async (patient) => {
+  const toggleActive = (patient) => {
     const nextActive = !patient.is_active;
     const verb = nextActive ? "activate" : "deactivate";
-    if (!window.confirm(`Are you sure you want to ${verb} ${getPatientName(patient)}?`)) return;
+    setConfirm({
+      title: `${nextActive ? "Activate" : "Deactivate"} Patient`,
+      message: `Are you sure you want to ${verb} ${getPatientName(patient)}?`,
+      confirmText: nextActive ? "Activate" : "Deactivate",
+      tone: nextActive ? "primary" : "danger",
+      onConfirm: () => doToggleActive(patient, nextActive),
+    });
+  };
 
+  const doToggleActive = async (patient, nextActive) => {
     try {
       const response = await parseApi(authFetch(`/patients/${patient.id}/active`, {
         method: "PATCH",
@@ -657,6 +667,17 @@ export default function AdminPatients() {
           saving={saving}
           onClose={() => setModal(null)}
           onSave={savePatient}
+        />
+      )}
+
+      {confirm && (
+        <ConfirmModal
+          title={confirm.title}
+          message={confirm.message}
+          confirmText={confirm.confirmText}
+          tone={confirm.tone}
+          onClose={() => setConfirm(null)}
+          onConfirm={() => { const c = confirm; setConfirm(null); c.onConfirm(); }}
         />
       )}
     </MainLayout>

@@ -3,6 +3,7 @@ import MainLayout from "../../Layout/MainLayout";
 import { API_URL, authFetch, getToken } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C } from "../../../utils/adminTheme";
+import ConfirmModal from "../../common/ConfirmModal";
 
 const EXPORT_COLUMNS = [
   { header: "Username", value: (user) => user.username || "" },
@@ -595,6 +596,7 @@ export default function ManageUsers() {
   const [modal, setModal] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [currentUserId, setCurrentUserId] = useState(null);
+  const [confirm, setConfirm] = useState(null);
   const itemsPerPage = 8;
 
   const showAlert = useCallback((type, message) => {
@@ -736,8 +738,17 @@ export default function ManageUsers() {
     }
   };
 
-  const handleRemove = async (user) => {
-    if (!window.confirm(`Deactivate "${user.username}"? This keeps the audit trail and blocks access.`)) return;
+  const handleRemove = (user) => {
+    setConfirm({
+      title: "Deactivate User",
+      message: `Deactivate "${user.username}"? This keeps the audit trail and blocks access.`,
+      confirmText: "Deactivate",
+      tone: "danger",
+      onConfirm: () => doRemove(user),
+    });
+  };
+
+  const doRemove = async (user) => {
     try {
       await parseApiResponse(await authFetch(`/users/${user.user_id}/status`, {
         method: "PATCH",
@@ -891,6 +902,17 @@ export default function ManageUsers() {
           saving={saving}
           onClose={() => setModal(null)}
           onSave={handleSave}
+        />
+      )}
+
+      {confirm && (
+        <ConfirmModal
+          title={confirm.title}
+          message={confirm.message}
+          confirmText={confirm.confirmText}
+          tone={confirm.tone}
+          onClose={() => setConfirm(null)}
+          onConfirm={() => { const c = confirm; setConfirm(null); c.onConfirm(); }}
         />
       )}
     </MainLayout>

@@ -14,6 +14,8 @@ import {
   inputStyle,
   todayISO,
 } from "../Workflow/ClinicUi";
+import Modal from "../common/Modal";
+import ReasonModal from "../common/ReasonModal";
 
 const APPOINTMENT_MANAGER_ROLES = ["Admin", "Frontdesk"];
 const STATUS_FILTERS = ["ALL", "PENDING", "CONFIRMED", "IN_QUEUE", "COMPLETED", "CANCELLED", "RESCHEDULED", "NO_SHOW"];
@@ -153,6 +155,7 @@ export default function AppointmentList() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [reschedule, setReschedule] = useState(null);
+  const [cancelTarget, setCancelTarget] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -194,16 +197,10 @@ export default function AppointmentList() {
       .sort(compareAppointments);
   }, [appointments, date, search, status, view]);
 
-  async function changeStatus(appointment, nextStatus) {
+  async function changeStatus(appointment, nextStatus, cancelReason = "") {
     if (isHistory(appointment)) {
       setError("History appointments cannot be changed.");
       return;
-    }
-
-    let cancelReason = "";
-    if (nextStatus === "CANCELLED") {
-      cancelReason = window.prompt("Cancellation reason");
-      if (!cancelReason) return;
     }
 
     setSavingId(appointment.id);
@@ -288,11 +285,15 @@ export default function AppointmentList() {
       {message && <div style={{ padding: "10px 12px", borderRadius: 8, background: "#edf8f1", color: "#0f6b3c", fontSize: 13, fontWeight: 800 }}>{message}</div>}
 
       {reschedule && (
-        <Panel style={{ padding: 16 }}>
-          <form onSubmit={submitReschedule} style={{ display: "grid", gridTemplateColumns: "1fr 160px 140px auto auto", gap: 10, alignItems: "end" }}>
-            <div>
-              <div style={{ fontSize: 12, color: "#6b778c", fontWeight: 800 }}>Rescheduling</div>
-              <div style={{ fontWeight: 900, color: "#162235" }}>#{reschedule.id} {reschedule.patient_name}</div>
+        <Modal
+          title="Reschedule Appointment"
+          subtitle={`#${reschedule.id}${reschedule.patient_name ? ` · ${reschedule.patient_name}` : ""}`}
+          onClose={() => (savingId === reschedule.id ? null : setReschedule(null))}
+        >
+          <form onSubmit={submitReschedule} style={{ display: "grid", gap: 14 }}>
+            <ErrorState message={error} />
+            <div style={{ padding: "12px 14px", borderRadius: 10, background: "#fff4de", color: "#9a6500", fontSize: 12.5, fontWeight: 800 }}>
+              Rescheduling returns the appointment to Pending so staff can reconfirm the new time.
             </div>
             <Field label="New date">
               <input style={inputStyle} type="date" min={todayISO()} value={reschedule.date} onChange={(e) => setReschedule({ ...reschedule, date: e.target.value })} />
@@ -300,10 +301,28 @@ export default function AppointmentList() {
             <Field label="New time">
               <input style={inputStyle} type="time" min={minTimeFor(reschedule.date)} value={reschedule.time} onChange={(e) => setReschedule({ ...reschedule, time: e.target.value })} />
             </Field>
-            <ActionButton disabled={savingId === reschedule.id}>Save</ActionButton>
-            <ActionButton tone="secondary" onClick={() => setReschedule(null)}>Cancel</ActionButton>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 4 }}>
+              <ActionButton type="button" tone="secondary" disabled={savingId === reschedule.id} onClick={() => setReschedule(null)}>Cancel</ActionButton>
+              <ActionButton type="submit" disabled={savingId === reschedule.id}>{savingId === reschedule.id ? "Saving..." : "Save"}</ActionButton>
+            </div>
           </form>
-        </Panel>
+        </Modal>
+      )}
+
+      {cancelTarget && (
+        <ReasonModal
+          title="Cancel Appointment"
+          subtitle={`#${cancelTarget.id}${cancelTarget.patient_name ? ` · ${cancelTarget.patient_name}` : ""}`}
+          label="Cancellation reason"
+          placeholder="Why is this appointment being cancelled?"
+          confirmText="Confirm Cancellation"
+          onClose={() => setCancelTarget(null)}
+          onConfirm={(reason) => {
+            const target = cancelTarget;
+            setCancelTarget(null);
+            changeStatus(target, "CANCELLED", reason);
+          }}
+        />
       )}
 
       <Panel style={{ overflow: "hidden" }}>
@@ -352,7 +371,7 @@ export default function AppointmentList() {
                             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                               {item.status === "PENDING" && <ActionButton disabled={savingId === item.id} tone="success" onClick={() => changeStatus(item, "CONFIRMED")}>Confirm</ActionButton>}
                               {["PENDING", "CONFIRMED", "RESCHEDULED"].includes(item.status) && <ActionButton disabled={savingId === item.id} tone="secondary" onClick={() => setReschedule({ id: item.id, patient_name: item.patient_name, date: item.date || todayISO(), time: item.time || "" })}>Reschedule</ActionButton>}
-                              {["PENDING", "CONFIRMED", "RESCHEDULED"].includes(item.status) && <ActionButton disabled={savingId === item.id} tone="danger" onClick={() => changeStatus(item, "CANCELLED")}>Cancel</ActionButton>}
+                              {["PENDING", "CONFIRMED", "RESCHEDULED"].includes(item.status) && <ActionButton disabled={savingId === item.id} tone="danger" onClick={() => setCancelTarget(item)}>Cancel</ActionButton>}
                               {["CONFIRMED", "IN_QUEUE"].includes(item.status) && isToday(item) && <ActionButton disabled={savingId === item.id} tone="warning" onClick={() => changeStatus(item, "NO_SHOW")}>No Show</ActionButton>}
                             </div>
                           </div>

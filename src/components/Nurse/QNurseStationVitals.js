@@ -14,6 +14,7 @@ import {
   getRows,
   todayISO,
 } from "../Workflow/ClinicUi";
+import ConfirmModal from "../common/ConfirmModal";
 
 const ACTIVE_STATUSES = ["WAITING", "CALLED", "IN_PROGRESS", "SKIPPED"];
 
@@ -23,6 +24,7 @@ export default function QNurseStationVitals() {
   const [queue, setQueue] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [confirm, setConfirm] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,9 +81,13 @@ export default function QNurseStationVitals() {
   }, [activeQueue]);
 
   const callEmergency = () => {
-    if (window.confirm("Call the national emergency hotline (911)?\n\nUse this only for a real medical emergency.")) {
-      window.location.href = "tel:911";
-    }
+    setConfirm({
+      title: "Call Emergency Hotline",
+      message: "Call the national emergency hotline (911)?\n\nUse this only for a real medical emergency.",
+      confirmText: "Call 911",
+      tone: "danger",
+      onConfirm: () => { window.location.href = "tel:911"; },
+    });
   };
 
   return (
@@ -181,6 +187,17 @@ export default function QNurseStationVitals() {
           )}
         </Panel>
       </div>
+
+      {confirm && (
+        <ConfirmModal
+          title={confirm.title}
+          message={confirm.message}
+          confirmText={confirm.confirmText}
+          tone={confirm.tone}
+          onClose={() => setConfirm(null)}
+          onConfirm={() => { const c = confirm; setConfirm(null); c.onConfirm(); }}
+        />
+      )}
     </MainLayout>
   );
 }

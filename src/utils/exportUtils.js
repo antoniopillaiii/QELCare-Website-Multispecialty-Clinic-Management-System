@@ -119,7 +119,8 @@ export function exportToExcel(filenameBase, sheetTitle, columns, rows) {
 export function exportToPdf({ title, subtitle, columns, rows }) {
   const popup = window.open("", "_blank", "width=1100,height=800");
   if (!popup) {
-    window.alert("Popup blocked. Please allow popups for this site, then try Download PDF again.");
+    // Popup was blocked. Return false so the caller (ExportMenu) can surface an
+    // in-app notice instead of a native window.alert.
     return false;
   }
 
@@ -195,7 +196,14 @@ export function ExportMenu({
   buttonLabel = "Download",
 }) {
   const [open, setOpen] = useState(false);
+  const [notice, setNotice] = useState("");
   const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (!notice) return undefined;
+    const id = window.setTimeout(() => setNotice(""), 8000);
+    return () => window.clearTimeout(id);
+  }, [notice]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -219,7 +227,10 @@ export function ExportMenu({
   const run = (action) => {
     setOpen(false);
     if (blocked) return;
-    if (action === "pdf") exportToPdf({ title, subtitle, columns, rows });
+    if (action === "pdf") {
+      const started = exportToPdf({ title, subtitle, columns, rows });
+      if (started === false) setNotice("Popup blocked. Please allow popups for this site, then try Download PDF again.");
+    }
     if (action === "excel") exportToExcel(filename, sheetTitle || title, columns, rows);
     if (action === "csv") exportToCsv(filename, columns, rows);
   };
@@ -311,6 +322,42 @@ export function ExportMenu({
               <span style={{ color: menuColors.muted, fontSize: 11, fontWeight: 700 }}>{item.hint}</span>
             </button>
           ))}
+        </div>
+      )}
+
+      {notice && (
+        <div
+          role="alert"
+          style={{
+            position: "fixed",
+            left: "50%",
+            bottom: 24,
+            transform: "translateX(-50%)",
+            zIndex: 1300,
+            maxWidth: "min(440px, calc(100vw - 32px))",
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 12,
+            padding: "12px 14px",
+            borderRadius: 12,
+            background: "#fff7df",
+            color: "#9a6500",
+            border: "1px solid #f0d58f",
+            boxShadow: "0 12px 34px rgba(15,23,42,.18)",
+            fontSize: 13,
+            fontWeight: 700,
+            fontFamily: "inherit",
+          }}
+        >
+          <span style={{ lineHeight: 1.45 }}>{notice}</span>
+          <button
+            type="button"
+            onClick={() => setNotice("")}
+            aria-label="Dismiss"
+            style={{ border: "none", background: "transparent", color: "#9a6500", cursor: "pointer", fontSize: 17, lineHeight: 1, fontWeight: 900, padding: 0, flexShrink: 0 }}
+          >
+            &times;
+          </button>
         </div>
       )}
     </div>

@@ -16,6 +16,8 @@ import {
   todayISO,
 } from "../Workflow/ClinicUi";
 import UserBooking from "./UserBooking";
+import ReasonModal from "../common/ReasonModal";
+import ConfirmModal from "../common/ConfirmModal";
 
 const TABS = [
   { id: "upcoming", label: "Upcoming" },
@@ -120,6 +122,7 @@ export default function PatientAppointments() {
   const [busyId, setBusyId] = useState(null);
   const [editing, setEditing] = useState(null);
   const [editForm, setEditForm] = useState({ date: "", time: "" });
+  const [cancelTarget, setCancelTarget] = useState(null);
 
   // `silent` = background poll: don't toggle the loading spinner and don't wipe
   // the visible list/bar on a transient error, so the live sync is seamless.
@@ -155,15 +158,20 @@ export default function PatientAppointments() {
     return () => clearInterval(id);
   }, [activeTab, load]);
 
-  async function cancelAppt(item) {
-    const reason = window.prompt(`Cancel appointment #${item.id} on ${formatDate(item.date)} at ${formatTime(item.time)}?\n\nPlease enter a reason for cancelling:`, "");
-    if (reason === null) return; // patient dismissed the prompt
-    if (!reason.trim()) { setActionErr("A reason is required to cancel."); return; }
+  function cancelAppt(item) {
+    setActionErr("");
+    setActionMsg("");
+    setCancelTarget(item);
+  }
+
+  async function confirmCancel(reason) {
+    const item = cancelTarget;
+    setCancelTarget(null);
     setBusyId(item.id);
     setActionErr("");
     setActionMsg("");
     try {
-      const res = await authFetch(`/appointments/${item.id}/cancel`, { method: "POST", body: JSON.stringify({ cancel_reason: reason.trim() }) });
+      const res = await authFetch(`/appointments/${item.id}/cancel`, { method: "POST", body: JSON.stringify({ cancel_reason: reason }) });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.message || "Failed to cancel appointment.");
       setActionMsg(`Appointment #${item.id} cancelled.`);
@@ -307,6 +315,20 @@ export default function PatientAppointments() {
           </div>
         </div>
       )}
+
+      {cancelTarget && (
+        <ReasonModal
+          title="Cancel Appointment"
+          subtitle={`#${cancelTarget.id} · ${formatDate(cancelTarget.date)} at ${formatTime(cancelTarget.time)}`}
+          label="Reason for cancelling"
+          placeholder="Please tell the clinic why you are cancelling..."
+          confirmText="Cancel Appointment"
+          cancelText="Keep Appointment"
+          busy={busyId === cancelTarget.id}
+          onClose={() => setCancelTarget(null)}
+          onConfirm={confirmCancel}
+        />
+      )}
     </div>
   );
 }
@@ -380,6 +402,7 @@ function RelativesTab() {
   const [form, setForm] = useState(emptyRelative());
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [confirm, setConfirm] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -445,8 +468,16 @@ function RelativesTab() {
     setMsg("");
   };
 
-  const remove = async (r) => {
-    if (!window.confirm(`Remove ${r.first_name} ${r.last_name} from your saved relatives?`)) return;
+  const remove = (r) => {
+    setConfirm({
+      title: "Remove Relative",
+      message: `Remove ${r.first_name} ${r.last_name} from your saved relatives?`,
+      confirmText: "Remove",
+      relative: r,
+    });
+  };
+
+  const doRemove = async (r) => {
     setError("");
     try {
       const res = await authFetch(`/relatives/${r.relative_id}`, { method: "DELETE" });
@@ -518,6 +549,16 @@ function RelativesTab() {
           </div>
         )}
       </Panel>
+
+      {confirm && (
+        <ConfirmModal
+          title={confirm.title}
+          message={confirm.message}
+          confirmText={confirm.confirmText}
+          onClose={() => setConfirm(null)}
+          onConfirm={() => { const r = confirm.relative; setConfirm(null); doRemove(r); }}
+        />
+      )}
     </div>
   );
 }

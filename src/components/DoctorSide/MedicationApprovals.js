@@ -9,6 +9,7 @@ import {
   Panel,
   formatDate,
 } from "../Workflow/ClinicUi";
+import ReasonModal from "../common/ReasonModal";
 
 export default function MedicationApprovals() {
   const [meds, setMeds] = useState([]);
@@ -18,6 +19,7 @@ export default function MedicationApprovals() {
   const [busyId, setBusyId] = useState(null);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
+  const [declineTarget, setDeclineTarget] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -54,15 +56,20 @@ export default function MedicationApprovals() {
     }
   };
 
-  const decline = async (med) => {
-    const reason = window.prompt(`Decline ${med.drug_name} for ${med.patient_name}?\n\nEnter a short reason (the patient will see it):`);
-    if (reason === null) return;
-    if (!reason.trim()) { setError("A reason is required to decline a medication."); return; }
+  const decline = (med) => {
+    setError("");
+    setMsg("");
+    setDeclineTarget(med);
+  };
+
+  const confirmDecline = async (reason) => {
+    const med = declineTarget;
+    setDeclineTarget(null);
     setBusyId(med.medication_id);
     setError("");
     setMsg("");
     try {
-      const res = await authFetch(`/medications/${med.medication_id}/reject`, { method: "PATCH", body: JSON.stringify({ reason: reason.trim() }) });
+      const res = await authFetch(`/medications/${med.medication_id}/reject`, { method: "PATCH", body: JSON.stringify({ reason }) });
       const payload = await res.json();
       if (!res.ok || payload.success === false) throw new Error(payload.message || "Failed to decline.");
       setMsg(`Declined ${med.drug_name} for ${med.patient_name}.`);
@@ -135,6 +142,18 @@ export default function MedicationApprovals() {
           </div>
         )}
       </div>
+
+      {declineTarget && (
+        <ReasonModal
+          title="Decline Medication"
+          subtitle={`${declineTarget.drug_name}${declineTarget.patient_name ? ` · ${declineTarget.patient_name}` : ""}`}
+          label="Reason for declining (the patient will see this)"
+          placeholder="Explain why this medication cannot be validated..."
+          confirmText="Decline Medication"
+          onClose={() => setDeclineTarget(null)}
+          onConfirm={confirmDecline}
+        />
+      )}
     </MainLayout>
   );
 }

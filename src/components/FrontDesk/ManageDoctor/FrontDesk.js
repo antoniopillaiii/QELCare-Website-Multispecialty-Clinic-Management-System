@@ -15,6 +15,7 @@ import {
   getRows,
   todayISO,
 } from "../../Workflow/ClinicUi";
+import ReasonModal from "../../common/ReasonModal";
 
 const ACTIVE_STATUSES = ["PENDING", "CONFIRMED", "IN_QUEUE", "FOR_BILLING", "RESCHEDULED"];
 
@@ -25,6 +26,7 @@ export default function FrontDesk() {
   const [savingId, setSavingId] = useState(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [cancelTarget, setCancelTarget] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -74,13 +76,7 @@ export default function FrontDesk() {
       .slice(0, 15);
   }, [appointments, today]);
 
-  async function updateStatus(appointment, nextStatus) {
-    let cancelReason = "";
-    if (nextStatus === "CANCELLED") {
-      cancelReason = window.prompt("Cancellation reason:");
-      if (!cancelReason || !cancelReason.trim()) return;
-    }
-
+  async function updateStatus(appointment, nextStatus, cancelReason = "") {
     setSavingId(appointment.id);
     setError("");
     setMessage("");
@@ -149,7 +145,7 @@ export default function FrontDesk() {
                           <ActionButton disabled={savingId === item.id} onClick={() => updateStatus(item, "IN_QUEUE")}>Check In</ActionButton>
                         )}
                         {["PENDING", "CONFIRMED", "RESCHEDULED"].includes(item.status) && (
-                          <ActionButton disabled={savingId === item.id} tone="danger" onClick={() => updateStatus(item, "CANCELLED")}>Cancel</ActionButton>
+                          <ActionButton disabled={savingId === item.id} tone="danger" onClick={() => setCancelTarget(item)}>Cancel</ActionButton>
                         )}
                         {item.status === "CONFIRMED" && isToday && (
                           <ActionButton disabled={savingId === item.id} tone="warning" onClick={() => updateStatus(item, "NO_SHOW")}>No Show</ActionButton>
@@ -205,6 +201,22 @@ export default function FrontDesk() {
 
         <AppointmentList />
       </div>
+
+      {cancelTarget && (
+        <ReasonModal
+          title="Cancel Appointment"
+          subtitle={`#${cancelTarget.id}${cancelTarget.patient_name ? ` · ${cancelTarget.patient_name}` : ""}`}
+          label="Cancellation reason"
+          placeholder="Why is this appointment being cancelled?"
+          confirmText="Confirm Cancellation"
+          onClose={() => setCancelTarget(null)}
+          onConfirm={(reason) => {
+            const target = cancelTarget;
+            setCancelTarget(null);
+            updateStatus(target, "CANCELLED", reason);
+          }}
+        />
+      )}
     </MainLayout>
   );
 }

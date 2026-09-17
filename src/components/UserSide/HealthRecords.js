@@ -12,6 +12,7 @@ import {
   formatDate,
   inputStyle,
 } from "../Workflow/ClinicUi";
+import ConfirmModal from "../common/ConfirmModal";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -175,6 +176,7 @@ function DocumentsTab() {
   const [ocrBusy, setOcrBusy] = useState(false);
   const [status, setStatus] = useState(null);
   const [error, setError] = useState(null);
+  const [confirm, setConfirm] = useState(null);
   const fileInputRef = useRef(null);
 
   const filtered = useMemo(() => {
@@ -280,8 +282,16 @@ function DocumentsTab() {
     }
   };
 
-  const remove = async (item) => {
-    if (!window.confirm(`Delete "${item.title}"?`)) return;
+  const remove = (item) => {
+    setConfirm({
+      title: "Delete Document",
+      message: `Delete "${item.title}"? This cannot be undone.`,
+      confirmText: "Delete",
+      item,
+    });
+  };
+
+  const doRemove = async (item) => {
     setError(null); setStatus(null);
     try {
       const response = await authFetch(`/patient-results/${item.result_id}`, { method: "DELETE" });
@@ -391,6 +401,16 @@ function DocumentsTab() {
           </div>
         </Panel>
       </div>
+
+      {confirm && (
+        <ConfirmModal
+          title={confirm.title}
+          message={confirm.message}
+          confirmText={confirm.confirmText}
+          onClose={() => setConfirm(null)}
+          onConfirm={() => { const item = confirm.item; setConfirm(null); doRemove(item); }}
+        />
+      )}
     </div>
   );
 }
@@ -436,6 +456,7 @@ function MedicationsTab() {
   const [files, setFiles] = useState([]);
   const [ocrBusy, setOcrBusy] = useState(false);
   const [parsed, setParsed] = useState([]);
+  const [confirm, setConfirm] = useState(null);
   const fileInputRef = useRef(null);
 
   const loadMeds = useCallback(async () => {
@@ -537,8 +558,16 @@ function MedicationsTab() {
     }
   };
 
-  const deleteMed = async (med) => {
-    if (!window.confirm(`Remove ${med.drug_name} from your medications?`)) return;
+  const deleteMed = (med) => {
+    setConfirm({
+      title: "Remove Medication",
+      message: `Remove ${med.drug_name} from your medications?`,
+      confirmText: "Remove",
+      med,
+    });
+  };
+
+  const doDeleteMed = async (med) => {
     setError(null);
     try {
       const response = await authFetch(`/medications/${med.medication_id}`, { method: "DELETE" });
@@ -801,6 +830,16 @@ function MedicationsTab() {
           </Panel>
         </div>
       </div>
+
+      {confirm && (
+        <ConfirmModal
+          title={confirm.title}
+          message={confirm.message}
+          confirmText={confirm.confirmText}
+          onClose={() => setConfirm(null)}
+          onConfirm={() => { const med = confirm.med; setConfirm(null); doDeleteMed(med); }}
+        />
+      )}
     </div>
   );
 }

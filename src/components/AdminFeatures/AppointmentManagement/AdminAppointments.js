@@ -3,6 +3,7 @@ import MainLayout from "../../Layout/MainLayout";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C } from "../../../utils/adminTheme";
+import ReasonModal from "../../common/ReasonModal";
 
 const EXPORT_COLUMNS = [
   { header: "Reference", value: (appt) => `APT-${String(appt.id).padStart(5, "0")}` },
@@ -358,6 +359,7 @@ export default function AdminAppointments() {
   const [dateFilter, setDateFilter] = useState("");
   const [doctorFilter, setDoctorFilter] = useState("all");
   const [modal, setModal] = useState(null);
+  const [cancelTarget, setCancelTarget] = useState(null);
 
   const showAlert = useCallback((type, message) => {
     setAlert({ type, message });
@@ -469,11 +471,10 @@ export default function AdminAppointments() {
     }
   };
 
-  const updateStatus = async (appointment, nextStatus) => {
-    let cancel_reason = null;
-    if (nextStatus === "CANCELLED") {
-      cancel_reason = window.prompt("Cancellation reason:");
-      if (!cancel_reason || !cancel_reason.trim()) return;
+  const updateStatus = async (appointment, nextStatus, cancel_reason = null) => {
+    if (nextStatus === "CANCELLED" && cancel_reason == null) {
+      setCancelTarget(appointment);
+      return;
     }
 
     try {
@@ -611,6 +612,22 @@ export default function AdminAppointments() {
           saving={saving}
           onClose={() => setModal(null)}
           onSave={saveAppointment}
+        />
+      )}
+
+      {cancelTarget && (
+        <ReasonModal
+          title="Cancel Appointment"
+          subtitle={`APT-${String(cancelTarget.id).padStart(5, "0")}${cancelTarget.patient_name ? ` · ${cancelTarget.patient_name}` : ""}`}
+          label="Cancellation reason"
+          placeholder="Why is this appointment being cancelled?"
+          confirmText="Confirm Cancellation"
+          onClose={() => setCancelTarget(null)}
+          onConfirm={(reason) => {
+            const target = cancelTarget;
+            setCancelTarget(null);
+            updateStatus(target, "CANCELLED", reason);
+          }}
         />
       )}
     </MainLayout>

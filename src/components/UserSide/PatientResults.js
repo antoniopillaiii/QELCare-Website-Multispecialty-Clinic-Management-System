@@ -13,6 +13,7 @@ import {
   inputStyle,
   todayISO,
 } from "../Workflow/ClinicUi";
+import ConfirmModal from "../common/ConfirmModal";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -198,6 +199,7 @@ export default function PatientResults() {
   const [ocrProgress, setOcrProgress] = useState(0);
   const [message, setMessage] = useState(null);
   const [error, setError] = useState(null);
+  const [confirm, setConfirm] = useState(null);
   const fileInputRef = useRef(null);
 
   const filteredResults = useMemo(() => {
@@ -359,8 +361,16 @@ export default function PatientResults() {
     }
   };
 
-  const deleteResult = async (item) => {
-    if (!window.confirm(`Delete ${item.title}?`)) return;
+  const deleteResult = (item) => {
+    setConfirm({
+      title: "Delete Result",
+      message: `Delete ${item.title}? This cannot be undone.`,
+      confirmText: "Delete",
+      item,
+    });
+  };
+
+  const doDeleteResult = async (item) => {
     setError(null);
     setMessage(null);
     try {
@@ -479,6 +489,16 @@ export default function PatientResults() {
           </div>
         </Panel>
       </div>
+
+      {confirm && (
+        <ConfirmModal
+          title={confirm.title}
+          message={confirm.message}
+          confirmText={confirm.confirmText}
+          onClose={() => setConfirm(null)}
+          onConfirm={() => { const item = confirm.item; setConfirm(null); doDeleteResult(item); }}
+        />
+      )}
     </div>
   );
 }
