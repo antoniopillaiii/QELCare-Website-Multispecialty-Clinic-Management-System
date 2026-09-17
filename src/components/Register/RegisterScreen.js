@@ -217,7 +217,7 @@ const styles = `
   /* Password */
   .rg-pw-wrap { position:relative; }
   .rg-pw-wrap .rg-input { padding:0 46px 0 40px; }
-  .rg-eye { position:absolute; right:6px; top:50%; transform:translateY(-50%); width:38px; height:38px; background:transparent; border:none; border-radius:9px; color:#9ca3af; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:background .15s,color .15s; z-index:2; padding:0; }
+  .rg-eye { position:absolute; right:4px; top:3px; bottom:3px; width:42px; background:transparent; border:none; border-radius:9px; color:#9ca3af; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:background .15s,color .15s; z-index:5; padding:0; }
   .rg-eye svg { width:17px; height:17px; display:block; pointer-events:none; }
   .rg-eye:hover { background:#f3f5f9; color:var(--ink-2); }
   .rg-eye:active { background:#e9edf3; }
@@ -463,9 +463,9 @@ export default function RegisterScreen() {
             </div>
 
             <div className="rg-brand-body">
-              <div className="rg-eyebrow"><span className="rg-eyebrow-dot" />New Patient Registration</div>
-              <h1>Create your<br /><em>QELCare patient account.</em></h1>
-              <p className="rg-brand-desc">Register as a new patient to book appointments, access your records, and manage your health services online.</p>
+              <div className="rg-eyebrow"><span className="rg-eyebrow-dot" />New Patient Sign Up</div>
+              <h1>Sign up for your<br /><em>QELCare patient account.</em></h1>
+              <p className="rg-brand-desc">Sign up as a new patient to book appointments, access your records, and manage your health services online.</p>
               <div className="rg-highlights">
                 {HIGHLIGHTS.map(h => (
                   <div className="rg-highlight" key={h.title}>
@@ -492,7 +492,7 @@ export default function RegisterScreen() {
               </button>
 
               <div className="rg-form-head">
-                <h2>Create account</h2>
+                <h2>Sign up</h2>
                 <p>Step {step} of 3 - {STEPS[step - 1]}</p>
               </div>
 
@@ -514,7 +514,7 @@ export default function RegisterScreen() {
                 ))}
               </div>
 
-              <div className="rg-badge"><span className="rg-badge-dot" />Patient Registration</div>
+              <div className="rg-badge"><span className="rg-badge-dot" />Patient Sign Up</div>
 
               {error   && <div className="rg-alert rg-alert-error" role="alert"><AlertIcon />{error}</div>}
               {success && <div className="rg-alert rg-alert-success" role="status"><CheckIcon />{success}</div>}
@@ -754,7 +754,7 @@ export default function RegisterScreen() {
                       className="rg-btn-main"
                       disabled={loading || !!success}
                     >
-                      {loading ? "Creating account..." : success ? "Done!" : "Create Account"}
+                      {loading ? "Signing up..." : success ? "Done!" : "Sign up"}
                     </button>
                   )}
                 </div>

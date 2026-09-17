@@ -279,7 +279,7 @@ export default function UserStatisticsReport() {
           <section style={styles.panel}>
             <h2 style={styles.panelTitle}>Status Notes</h2>
             <p style={styles.summary}>
-              Verified accounts can log in and use their assigned module. Deactivated accounts are blocked from access. Other statuses include unverified or locked accounts.
+              Verified accounts can sign in and use their assigned module. Deactivated accounts are blocked from access. Other statuses include unverified or locked accounts.
             </p>
             <p style={styles.recommendation}>
               Admin should create and manage every staff account separately. Frontdesk, nurse, doctor, cashier, admin, and patient users must remain distinct accounts for audit and accountability.

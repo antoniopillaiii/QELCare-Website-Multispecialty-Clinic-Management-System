@@ -214,10 +214,10 @@ const styles = `
   .ls-input-error { border-color: #fca5a5 !important; background: #fff8f8 !important; }
 
   .ls-toggle {
-    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
-    width: 38px; height: 38px; background: transparent; border-radius: 9px;
+    position: absolute; right: 4px; top: 3px; bottom: 3px;
+    width: 42px; background: transparent; border-radius: 9px;
     color: #9ca3af; cursor: pointer; display: flex; align-items: center; justify-content: center;
-    transition: background .15s, color .15s; border: none; z-index: 2; padding: 0;
+    transition: background .15s, color .15s; border: none; z-index: 5; padding: 0;
   }
   .ls-toggle svg { width: 18px; height: 18px; display: block; pointer-events: none; }
   .ls-toggle:hover { background: #f3f5f9; color: var(--ink-2); }
@@ -413,7 +413,7 @@ export default function LoginScreen() {
         localStorage.removeItem("qelcare_remembered_user");
       }
       saveLoginData(data.token, data.user);
-      setSuccess("Login successful! Redirecting...");
+      setSuccess("Signed in successfully! Redirecting...");
       setTimeout(() => navigate(ROLE_REDIRECT[data.user.role] || "/dashboard"), 800);
     } catch {
       setError("Cannot connect to server. Please try again.");

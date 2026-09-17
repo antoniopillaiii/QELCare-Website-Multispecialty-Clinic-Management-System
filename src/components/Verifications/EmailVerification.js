@@ -97,7 +97,7 @@ export default function EmailVerification() {
 
       if (data.success) {
         if (isRegistration) {
-          setSuccess(data.message || "Account verified! Redirecting to login...");
+          setSuccess(data.message || "Account verified! Redirecting to sign in...");
           sessionStorage.removeItem("otp_email");
           sessionStorage.removeItem("otp_flow");
           sessionStorage.removeItem("otp_code");
@@ -171,7 +171,7 @@ export default function EmailVerification() {
 
       if (!res.ok) return setError(data.message || "Reset failed.");
 
-      setSuccess("Password reset successfully! Redirecting to login...");
+      setSuccess("Password reset successfully! Redirecting to sign in...");
       sessionStorage.removeItem("otp_email");
       sessionStorage.removeItem("otp_flow");
       sessionStorage.removeItem("otp_code");

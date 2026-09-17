@@ -159,7 +159,7 @@ export default function AdminInquiries() {
         ) : rows.length === 0 ? (
           <div style={{ padding: 28, textAlign: "center", color: MUTED }}>
             <div style={{ fontWeight: 900, color: NAVY, marginBottom: 4 }}>No inquiries</div>
-            <div style={{ fontSize: 13 }}>New inquiries from the login page will appear here.</div>
+            <div style={{ fontSize: 13 }}>New inquiries from the sign in page will appear here.</div>
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>

@@ -999,8 +999,8 @@ const infoCards = [
   },
   {
     kicker: "Portal Access",
-    main: "Secure Login",
-    desc: "Returning users may continue to the clinic portal through the login button.",
+    main: "Secure Sign In",
+    desc: "Returning users may continue to the clinic portal through the sign in button.",
   },
 ];
 
@@ -1084,7 +1084,7 @@ const visitCards = [
     title: "Patient Access",
     body: "KOBE CLINIC provides a simple digital entry point for patients who need to access the clinic portal.",
     items: [
-      "Use the login button to continue to the patient portal",
+      "Use the Sign in button to continue to the patient portal",
       "View clinic departments and visit information from the homepage",
       "Follow the Facebook page for public updates and clinic communication",
     ],
@@ -1120,7 +1120,7 @@ function Header({ isMenuOpen, setIsMenuOpen }) {
               Facebook Page
             </a>
             <Link className="btn btn-primary" to="/login">
-              Log in
+              Sign in
             </Link>
             <button
               className="mobile-toggle"
@@ -1142,7 +1142,7 @@ function Header({ isMenuOpen, setIsMenuOpen }) {
           <a href="#departments" onClick={closeMenu}>Departments</a>
           <a href="#visit" onClick={closeMenu}>Visit Information</a>
           <a href="#contact" onClick={closeMenu}>Contact</a>
-          <Link to="/login" onClick={closeMenu}>Log in</Link>
+          <Link to="/login" onClick={closeMenu}>Sign in</Link>
         </div>
       </div>
     </>
@@ -1169,7 +1169,7 @@ function Hero() {
 
             <div className="hero-actions">
               <Link className="btn btn-light" to="/login">
-                Log in to portal
+                Sign in to portal
                 <ArrowRight size={18} strokeWidth={2.4} />
               </Link>
               <a className="btn btn-ghost" href="#departments">View departments</a>
@@ -1286,7 +1286,7 @@ function AboutSection() {
               As a multi-specialty clinic, KOBE CLINIC supports different healthcare needs through departments such as Internal Medicine, General Medicine, Pediatrics, Obstetrics and Gynecology, ENT, Psychiatry, Rehabilitation Medicine, Laboratory, and other specialty services. This setup allows patients to access several types of care in a single clinic environment.
             </p>
             <p>
-              The clinic homepage is designed to give visitors a clear view of KOBE CLINIC's location, contact details, operating hours, available departments, and online access points. Patients can also use the Facebook page for public updates or proceed to the login portal when they need digital access to clinic-related services.
+              The clinic homepage is designed to give visitors a clear view of KOBE CLINIC's location, contact details, operating hours, available departments, and online access points. Patients can also use the Facebook page for public updates or proceed to sign in when they need digital access to clinic-related services.
             </p>
           </article>
 
@@ -1317,7 +1317,7 @@ function AboutSection() {
               </div>
               <div>
                 <strong>Patient-friendly access</strong>
-                <span>The homepage highlights clinic details, departments, operating hours, Facebook access, and a direct login path for returning users.</span>
+                <span>The homepage highlights clinic details, departments, operating hours, Facebook access, and a direct sign in path for returning users.</span>
               </div>
             </article>
           </div>
@@ -1391,11 +1391,11 @@ function VisitSection() {
           <div className="cta-copy">
             <h2>Plan your visit to KOBE CLINIC.</h2>
             <p>
-              Review the clinic location, public hours, departments, and contact details before your visit. Returning users may continue to the login portal for online clinic access.
+              Review the clinic location, public hours, departments, and contact details before your visit. Returning users may continue to sign in for online clinic access.
             </p>
           </div>
           <Link className="btn btn-primary" to="/login">
-            Proceed to Login
+            Proceed to Sign in
             <ArrowRight size={18} strokeWidth={2.4} />
           </Link>
         </div>

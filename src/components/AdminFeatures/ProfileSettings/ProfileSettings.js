@@ -458,7 +458,7 @@ export default function ProfileSettings() {
       }
 
       // Only reached when the current password verified AND the new hash was saved.
-      showAlert("success", "Password changed. Please log in again.");
+      showAlert("success", "Password changed. Please sign in again.");
       window.setTimeout(() => logout(), 1200);
     } catch (error) {
       showAlert("error", error.message || "Password change failed.");
