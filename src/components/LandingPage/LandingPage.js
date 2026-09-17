@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 
 const styles = `
   :root {
@@ -63,6 +63,32 @@ const styles = `
     border: none;
     background: none;
     cursor: pointer;
+  }
+
+  /* Keyboard focus ring — visible on both the dark hero and light sections. */
+  a:focus-visible,
+  button:focus-visible {
+    outline: 3px solid var(--accent-2);
+    outline-offset: 3px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+
+    .btn:hover,
+    .dept-card:hover {
+      transform: none;
+    }
   }
 
   .container {
@@ -168,6 +194,12 @@ const styles = `
     display: flex;
     align-items: center;
     gap: 12px;
+  }
+
+  /* Keep the two header buttons the same height so they align cleanly. */
+  .header-actions .btn-outline,
+  .header-actions .btn-primary {
+    min-height: 48px;
   }
 
   .btn {
@@ -804,8 +836,7 @@ const styles = `
     }
 
     .hero-stats,
-    .info-grid,
-    .departments-grid {
+    .info-grid {
       grid-template-columns: 1fr;
     }
 
@@ -878,6 +909,10 @@ const styles = `
     .cta-box {
       padding: 20px;
       border-radius: 22px;
+    }
+
+    .departments-grid {
+      grid-template-columns: 1fr;
     }
 
     .hero-actions {
@@ -1142,21 +1177,30 @@ function Header({ isMenuOpen, setIsMenuOpen }) {
             </a>
             <button
               className="mobile-toggle"
-              aria-label="Open menu"
+              aria-label={isMenuOpen ? "Close menu" : "Open menu"}
+              aria-expanded={isMenuOpen}
+              aria-controls="mobile-menu"
               type="button"
               onClick={() => setIsMenuOpen((open) => !open)}
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round">
-                <path d="M4 7h16" />
-                <path d="M4 12h16" />
-                <path d="M4 17h16" />
-              </svg>
+              {isMenuOpen ? (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M6 6l12 12" />
+                  <path d="M18 6 6 18" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round">
+                  <path d="M4 7h16" />
+                  <path d="M4 12h16" />
+                  <path d="M4 17h16" />
+                </svg>
+              )}
             </button>
           </div>
         </div>
       </header>
 
-      <div className={`backdrop-nav${isMenuOpen ? " show" : ""}`}>
+      <div className={`backdrop-nav${isMenuOpen ? " show" : ""}`} id="mobile-menu">
         <div className="menu">
           <a href="#about" onClick={closeMenu}>About</a>
           <a href="#departments" onClick={closeMenu}>Departments</a>
@@ -1457,6 +1501,16 @@ function Footer() {
 
 export default function KobeClinicReact() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  // Let keyboard users dismiss the mobile menu with Escape.
+  useEffect(() => {
+    if (!isMenuOpen) return undefined;
+    const onKey = (event) => {
+      if (event.key === "Escape") setIsMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isMenuOpen]);
 
   return (
     <>
