@@ -1,22 +1,25 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { saveLoginData, API_URL, consumeSessionExpired } from "../../utils/auth";
-
-// """ Icons """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-function PlusIcon()     { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14"/></svg>; }
-function UserIcon()     { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>; }
-function LockIcon()     { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V8a4 4 0 1 1 8 0v2"/></svg>; }
-function EyeOpen()      { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="3"/></svg>; }
-function EyeClosed()    { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3l18 18"/><path d="M10.6 10.7a2 2 0 0 0 2.7 2.7"/><path d="M9.4 5.1A11.2 11.2 0 0 1 12 5c6.5 0 10 7 10 7a15.8 15.8 0 0 1-4 4.7"/><path d="M6.6 6.7C3.9 8.5 2 12 2 12a15.8 15.8 0 0 0 10 7 10.7 10.7 0 0 0 4-.8"/></svg>; }
-function UserPlusIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M16 11h6"/></svg>; }
-function ShieldIcon()   { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l7 4v5c0 4.5-2.9 7.9-7 9-4.1-1.1-7-4.5-7-9V7l7-4z"/><path d="M9.5 12.2l1.8 1.8 3.7-4.2"/></svg>; }
-function KeyIcon()      { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="15" r="5"/><path d="M13 9l7.5-7.5M17 5l2 2"/></svg>; }
-function GridIcon()     { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>; }
-function AlertIcon()    { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>; }
-function CheckIcon()    { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>; }
-function HomeIcon()     { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>; }
-function WarnIcon()     { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>; }
-function ClockIcon()    { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>; }
+import {
+  Plus as PlusIcon,
+  User as UserIcon,
+  Lock as LockIcon,
+  Eye as EyeOpen,
+  EyeOff as EyeClosed,
+  UserPlus as UserPlusIcon,
+  ShieldCheck as ShieldIcon,
+  KeyRound as KeyIcon,
+  LayoutGrid as GridIcon,
+  CircleAlert as AlertIcon,
+  Check as CheckIcon,
+  Home as HomeIcon,
+  TriangleAlert as WarnIcon,
+  Clock as ClockIcon,
+  MessageSquareText as InquiryIcon,
+  Send as SendIcon,
+  X as CloseIcon,
+} from "lucide-react";
 
 const ROLE_REDIRECT = {
   Admin:   "/admin/dashboard",
@@ -80,6 +83,23 @@ const styles = `
   html, body, #root { height: 100%; overflow: hidden; }
   body { font-family: 'DM Sans', system-ui, sans-serif; background: linear-gradient(135deg, #eef2fb 0%, #f4f7fc 60%, #eaf0f9 100%); }
   button, input { font: inherit; outline: none; }
+
+  /* Restore a clear keyboard focus ring for buttons, links, and checkboxes
+     (text inputs keep their own :focus ring below). */
+  a:focus-visible,
+  button:focus-visible,
+  input[type="checkbox"]:focus-visible {
+    outline: 3px solid var(--blue);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration: .001ms !important; animation-duration: .001ms !important; }
+    .ls-btn:hover:not(:disabled), .ls-patient-btn:hover, .ls-home-btn:hover { transform: none; }
+  }
+
+  /* Inquiry modal inputs — match the login field focus treatment. */
+  .ls-inq-input:focus { border-color: var(--blue); background: #fff; box-shadow: 0 0 0 3px rgba(45,107,228,.11); }
 
   /* "" Page "" */
   .ls-page { height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
@@ -194,13 +214,14 @@ const styles = `
   .ls-input-error { border-color: #fca5a5 !important; background: #fff8f8 !important; }
 
   .ls-toggle {
-    position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
-    width: 32px; height: 32px; background: transparent; border-radius: 8px;
-    color: #9ca3af; cursor: pointer; display: grid; place-items: center;
-    transition: background .15s, color .15s; border: none;
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    width: 38px; height: 38px; background: transparent; border-radius: 9px;
+    color: #9ca3af; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: background .15s, color .15s; border: none; z-index: 2; padding: 0;
   }
-  .ls-toggle svg { width: 16px; height: 16px; }
+  .ls-toggle svg { width: 18px; height: 18px; display: block; pointer-events: none; }
   .ls-toggle:hover { background: #f3f5f9; color: var(--ink-2); }
+  .ls-toggle:active { background: #e9edf3; }
 
   /* Remember me + forgot */
   .ls-row-meta { display: flex; align-items: center; justify-content: space-between; margin: -2px 0 16px; }
@@ -271,7 +292,7 @@ function Inq({ label, value, onChange, type = "text" }) {
   return (
     <label style={{ display: "grid", gap: 5, fontSize: 12, fontWeight: 800, color: "#42526a" }}>
       {label}
-      <input type={type} value={value} onChange={e => onChange(e.target.value)} style={inqInputStyle} />
+      <input className="ls-inq-input" type={type} value={value} onChange={e => onChange(e.target.value)} style={inqInputStyle} />
     </label>
   );
 }
@@ -313,6 +334,14 @@ export default function LoginScreen() {
       setErrorType("warn");
     }
   }, []);
+
+  // Let keyboard users dismiss the inquiry modal with Escape.
+  useEffect(() => {
+    if (!showInquiry) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") setShowInquiry(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showInquiry]);
 
   const clearFeedback = () => { setError(""); setErrorType("error"); setAttemptsLeft(null); };
 
@@ -573,7 +602,6 @@ export default function LoginScreen() {
                     type="button"
                     onClick={() => setShowPass(v => !v)}
                     aria-label={showPass ? "Hide password" : "Show password"}
-                    tabIndex={-1}
                   >
                     {showPass ? <EyeClosed /> : <EyeOpen />}
                   </button>
@@ -638,17 +666,20 @@ export default function LoginScreen() {
 
       {showInquiry && (
         <div onClick={() => setShowInquiry(false)} style={{ position: "fixed", inset: 0, background: "rgba(8,18,33,.5)", display: "grid", placeItems: "center", padding: 16, zIndex: 100 }}>
-          <div onClick={e => e.stopPropagation()} style={{ width: "min(520px, 96vw)", maxHeight: "90vh", overflowY: "auto", background: "#fff", borderRadius: 16, boxShadow: "0 24px 64px rgba(14,35,64,.28)", fontFamily: "'DM Sans', system-ui, sans-serif" }}>
-            <div style={{ position: "sticky", top: 0, background: "#fff", borderBottom: "1px solid #e8eef6", padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h3 style={{ margin: 0, fontSize: 18, fontWeight: 900, color: "#0e2340" }}>Send an Inquiry</h3>
-              <button onClick={() => setShowInquiry(false)} aria-label="Close" style={{ border: 0, background: "#eef4fb", color: "#163a6b", width: 34, height: 34, borderRadius: 10, fontSize: 18, fontWeight: 900, cursor: "pointer" }}>×</button>
+          <div role="dialog" aria-modal="true" aria-labelledby="ls-inq-title" onClick={e => e.stopPropagation()} style={{ width: "min(520px, 96vw)", maxHeight: "90vh", overflowY: "auto", background: "#fff", borderRadius: 16, boxShadow: "0 24px 64px rgba(14,35,64,.28)", fontFamily: "'DM Sans', system-ui, sans-serif" }}>
+            <div style={{ position: "sticky", top: 0, background: "#fff", borderBottom: "1px solid #e8eef6", padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <h3 id="ls-inq-title" style={{ margin: 0, fontSize: 18, fontWeight: 900, color: "#0e2340", display: "flex", alignItems: "center", gap: 9 }}>
+                <span style={{ width: 32, height: 32, borderRadius: 9, background: "#eef4fb", color: "#163a6b", display: "grid", placeItems: "center", flexShrink: 0 }}><InquiryIcon size={17} /></span>
+                Send an Inquiry
+              </h3>
+              <button onClick={() => setShowInquiry(false)} aria-label="Close" style={{ border: 0, background: "#eef4fb", color: "#163a6b", width: 34, height: 34, borderRadius: 10, cursor: "pointer", display: "grid", placeItems: "center", flexShrink: 0 }}><CloseIcon size={18} /></button>
             </div>
             <div style={{ padding: "16px 20px 22px", display: "grid", gap: 12 }}>
               <p style={{ margin: 0, color: "#5a6a7e", fontSize: 13.5, lineHeight: 1.55 }}>No account needed. Send your question or a booking request and the clinic front desk will contact you.</p>
-              {inqErr && <div style={{ padding: "10px 12px", borderRadius: 8, background: "#fef2f2", color: "#b91c1c", fontWeight: 700, fontSize: 13 }}>{inqErr}</div>}
+              {inqErr && <div role="alert" style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderRadius: 8, background: "#fef2f2", color: "#b91c1c", fontWeight: 700, fontSize: 13 }}><AlertIcon size={16} style={{ flexShrink: 0 }} />{inqErr}</div>}
               {inqMsg ? (
                 <>
-                  <div style={{ padding: "10px 12px", borderRadius: 8, background: "#edf8f1", color: "#0f6b3c", fontWeight: 700, fontSize: 13 }}>{inqMsg}</div>
+                  <div role="status" style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderRadius: 8, background: "#edf8f1", color: "#0f6b3c", fontWeight: 700, fontSize: 13 }}><CheckIcon size={16} style={{ flexShrink: 0 }} />{inqMsg}</div>
                   <div style={{ display: "flex", justifyContent: "flex-end" }}>
                     <button onClick={() => setShowInquiry(false)} style={{ border: 0, background: "#163a6b", color: "#fff", borderRadius: 10, padding: "10px 18px", fontWeight: 800, cursor: "pointer" }}>Done</button>
                   </div>
@@ -666,11 +697,11 @@ export default function LoginScreen() {
                   </div>
                   <label style={{ display: "grid", gap: 5, fontSize: 12, fontWeight: 800, color: "#42526a" }}>
                     Message *
-                    <textarea value={inq.message} onChange={e => setInq(s => ({ ...s, message: e.target.value }))} rows={4} style={inqInputStyle} placeholder="How can the clinic help you?" />
+                    <textarea className="ls-inq-input" value={inq.message} onChange={e => setInq(s => ({ ...s, message: e.target.value }))} rows={4} style={inqInputStyle} placeholder="How can the clinic help you?" />
                   </label>
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
                     <button onClick={() => setShowInquiry(false)} style={{ border: "1px solid #cddbeb", background: "#fff", color: "#163a6b", borderRadius: 10, padding: "10px 16px", fontWeight: 800, cursor: "pointer" }}>Close</button>
-                    <button onClick={submitInquiry} disabled={inqBusy} style={{ border: 0, background: "#163a6b", color: "#fff", borderRadius: 10, padding: "10px 18px", fontWeight: 800, cursor: "pointer", opacity: inqBusy ? .6 : 1 }}>{inqBusy ? "Sending..." : "Send Inquiry"}</button>
+                    <button onClick={submitInquiry} disabled={inqBusy} style={{ display: "inline-flex", alignItems: "center", gap: 7, border: 0, background: "#163a6b", color: "#fff", borderRadius: 10, padding: "10px 18px", fontWeight: 800, cursor: "pointer", opacity: inqBusy ? .6 : 1 }}><SendIcon size={15} />{inqBusy ? "Sending..." : "Send Inquiry"}</button>
                   </div>
                 </>
               )}

@@ -18,6 +18,7 @@ import {
   Menu,
   X,
   ArrowRight,
+  ExternalLink,
 } from "lucide-react";
 
 const styles = `
@@ -954,16 +955,6 @@ const styles = `
   }
 `;
 
-// Facebook is a brand mark, so it stays a small inline logo (Lucide dropped
-// brand icons in v1). Every other icon on the page comes from lucide-react.
-function FacebookGlyph({ size = 18 }) {
-  return (
-    <svg viewBox="0 0 24 24" width={size} height={size} fill="currentColor" aria-hidden="true">
-      <path d="M13.5 21.9v-7.9h2.66l.4-3.09h-3.06V8.94c0-.9.25-1.5 1.53-1.5h1.64V4.67c-.28-.04-1.26-.12-2.4-.12-2.37 0-4 1.45-4 4.11v2.29H7.5V14h2.77v7.9h3.23Z" />
-    </svg>
-  );
-}
-
 // Shared department icons keep a single consistent Lucide look.
 const iconProps = { strokeWidth: 1.9, "aria-hidden": true };
 
@@ -1126,7 +1117,6 @@ function Header({ isMenuOpen, setIsMenuOpen }) {
 
           <div className="header-actions">
             <a className="btn btn-outline" href="https://www.facebook.com/kobeclinicalabang/" target="_blank" rel="noreferrer">
-              <FacebookGlyph size={17} />
               Facebook Page
             </a>
             <Link className="btn btn-primary" to="/login">
@@ -1259,7 +1249,7 @@ function Hero() {
 
               <div className="contact-item">
                 <div className="contact-icon" aria-hidden="true">
-                  <FacebookGlyph size={21} />
+                  <ExternalLink {...iconProps} />
                 </div>
                 <div>
                   <strong>Facebook Page</strong>
