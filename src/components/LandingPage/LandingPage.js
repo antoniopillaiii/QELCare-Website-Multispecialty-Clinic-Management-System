@@ -1,4 +1,24 @@
 import React, { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import {
+  Plus,
+  HeartPulse,
+  Ear,
+  Stethoscope,
+  FlaskConical,
+  Venus,
+  Baby,
+  Brain,
+  BriefcaseMedical,
+  Dumbbell,
+  MapPin,
+  Phone,
+  Clock,
+  CalendarCheck,
+  Menu,
+  X,
+  ArrowRight,
+} from "lucide-react";
 
 const styles = `
   :root {
@@ -332,8 +352,8 @@ const styles = `
 
   .hero-title {
     font-size: clamp(2.7rem, 5.4vw, 5rem);
-    line-height: 0.96;
-    letter-spacing: -0.07em;
+    line-height: 0.98;
+    letter-spacing: -0.045em;
     max-width: 760px;
     margin-bottom: 18px;
   }
@@ -933,31 +953,18 @@ const styles = `
   }
 `;
 
-function Icon({ children, viewBox = "0 0 24 24", className }) {
+// Facebook is a brand mark, so it stays a small inline logo (Lucide dropped
+// brand icons in v1). Every other icon on the page comes from lucide-react.
+function FacebookGlyph({ size = 18 }) {
   return (
-    <svg
-      className={className}
-      viewBox={viewBox}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.1"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {children}
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="currentColor" aria-hidden="true">
+      <path d="M13.5 21.9v-7.9h2.66l.4-3.09h-3.06V8.94c0-.9.25-1.5 1.53-1.5h1.64V4.67c-.28-.04-1.26-.12-2.4-.12-2.37 0-4 1.45-4 4.11v2.29H7.5V14h2.77v7.9h3.23Z" />
     </svg>
   );
 }
 
-function BrandIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 3v18" />
-      <path d="M3 12h18" />
-    </svg>
-  );
-}
+// Shared department icons keep a single consistent Lucide look.
+const iconProps = { strokeWidth: 1.9, "aria-hidden": true };
 
 const stats = [
   {
@@ -1010,107 +1017,55 @@ const departments = [
     title: "Cardiology",
     body: "Consultation support for heart-related concerns, cardiovascular follow-ups, and patient monitoring.",
     chip: "Heart care",
-    icon: <path d="M12 21s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 5.6-7 10-7 10Z" />,
+    icon: HeartPulse,
   },
   {
     title: "ENT",
     body: "Ear, nose, and throat consultations for common concerns, specialty evaluation, and follow-up care.",
     chip: "Ear, nose, throat",
-    icon: (
-      <>
-        <path d="M12 3c4.4 0 8 3.1 8 7 0 5.8-8 11-8 11S4 15.8 4 10c0-3.9 3.6-7 8-7Z" />
-        <path d="M9 10h6" />
-      </>
-    ),
+    icon: Ear,
   },
   {
     title: "Internal Medicine",
     body: "Adult medical consultations for general health concerns, chronic condition review, and follow-up care.",
     chip: "Adult medicine",
-    icon: (
-      <>
-        <path d="M3 12h18" />
-        <path d="M6 7h12" />
-        <path d="M8 17h8" />
-      </>
-    ),
+    icon: Stethoscope,
   },
   {
     title: "Laboratory",
     body: "Diagnostic support for laboratory testing, specimen services, and coordinated result processing.",
     chip: "Diagnostics",
-    icon: (
-      <>
-        <path d="M9 3h6" />
-        <path d="M10 3v4.5" />
-        <path d="M14 3v4.5" />
-        <path d="M8 14h8" />
-        <path d="M8 7.5h8" />
-        <path d="M8.5 21a4.5 4.5 0 0 1-3.2-7.7L8 10.6h8l2.7 2.7A4.5 4.5 0 0 1 15.5 21Z" />
-      </>
-    ),
+    icon: FlaskConical,
   },
   {
     title: "OB-Gyne",
     body: "Women's health consultations, screening support, pregnancy-related care, and follow-up visits.",
     chip: "Women's health",
-    icon: (
-      <>
-        <path d="M7 3v18" />
-        <path d="M17 3v18" />
-        <path d="M7 7c2-1.3 3.6-2 5-2s3 .7 5 2v10c-2-1.3-3.6-2-5-2s-3 .7-5 2Z" />
-      </>
-    ),
+    icon: Venus,
   },
   {
     title: "Pediatrics",
     body: "Child-focused consultations, routine checkups, developmental care, and family-oriented medical visits.",
     chip: "Child care",
-    icon: (
-      <>
-        <path d="M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
-        <path d="M15 13a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z" />
-        <path d="M4 20a5 5 0 0 1 10 0" />
-        <path d="M13 20a4 4 0 0 1 7 0" />
-      </>
-    ),
+    icon: Baby,
   },
   {
     title: "Psychiatry",
     body: "Mental health consultations for confidential care, patient review, and continuity of treatment.",
     chip: "Mental health",
-    icon: (
-      <>
-        <path d="M12 2a8 8 0 0 0 0 16c1.4 0 2.8-.4 4-1.1" />
-        <path d="M12 6v6l4 2" />
-        <path d="M20 20l-2-2" />
-      </>
-    ),
+    icon: Brain,
   },
   {
     title: "General Medicine",
     body: "Primary care consultations for common concerns, follow-up visits, and referrals to specialty care.",
     chip: "Primary care",
-    icon: (
-      <>
-        <path d="M4 7h16" />
-        <path d="M6 7l1.5 10h9L18 7" />
-        <path d="M10 7V4h4v3" />
-      </>
-    ),
+    icon: BriefcaseMedical,
   },
   {
     title: "Rehabilitation",
     body: "Rehabilitation support for recovery, movement improvement, therapy follow-ups, and functional care.",
     chip: "Recovery support",
-    icon: (
-      <>
-        <path d="M6 19v-5" />
-        <path d="M10 19V9" />
-        <path d="M14 19v-7" />
-        <path d="M18 19V5" />
-      </>
-    ),
+    icon: Dumbbell,
   },
 ];
 
@@ -1153,7 +1108,7 @@ function Header({ isMenuOpen, setIsMenuOpen }) {
         <div className="container inner">
           <a href="#home" className="brand" aria-label="KOBE CLINIC Home" onClick={closeMenu}>
             <div className="brand-mark" aria-hidden="true">
-              <BrandIcon />
+              <Plus strokeWidth={2.75} />
             </div>
             <div className="brand-copy">
               <strong>KOBE CLINIC</strong>
@@ -1170,11 +1125,12 @@ function Header({ isMenuOpen, setIsMenuOpen }) {
 
           <div className="header-actions">
             <a className="btn btn-outline" href="https://www.facebook.com/kobeclinicalabang/" target="_blank" rel="noreferrer">
+              <FacebookGlyph size={17} />
               Facebook Page
             </a>
-            <a className="btn btn-primary" href="/login">
+            <Link className="btn btn-primary" to="/login">
               Log in
-            </a>
+            </Link>
             <button
               className="mobile-toggle"
               aria-label={isMenuOpen ? "Close menu" : "Open menu"}
@@ -1183,18 +1139,7 @@ function Header({ isMenuOpen, setIsMenuOpen }) {
               type="button"
               onClick={() => setIsMenuOpen((open) => !open)}
             >
-              {isMenuOpen ? (
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M6 6l12 12" />
-                  <path d="M18 6 6 18" />
-                </svg>
-              ) : (
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round">
-                  <path d="M4 7h16" />
-                  <path d="M4 12h16" />
-                  <path d="M4 17h16" />
-                </svg>
-              )}
+              {isMenuOpen ? <X strokeWidth={2.1} /> : <Menu strokeWidth={2.1} />}
             </button>
           </div>
         </div>
@@ -1206,7 +1151,7 @@ function Header({ isMenuOpen, setIsMenuOpen }) {
           <a href="#departments" onClick={closeMenu}>Departments</a>
           <a href="#visit" onClick={closeMenu}>Visit Information</a>
           <a href="#contact" onClick={closeMenu}>Contact</a>
-          <a href="/login" onClick={closeMenu}>Log in</a>
+          <Link to="/login" onClick={closeMenu}>Log in</Link>
         </div>
       </div>
     </>
@@ -1232,7 +1177,10 @@ function Hero() {
             </p>
 
             <div className="hero-actions">
-              <a className="btn btn-light" href="/login">Log in to portal</a>
+              <Link className="btn btn-light" to="/login">
+                Log in to portal
+                <ArrowRight size={18} strokeWidth={2.4} />
+              </Link>
               <a className="btn btn-ghost" href="#departments">View departments</a>
             </div>
 
@@ -1280,10 +1228,7 @@ function Hero() {
             <div className="contact-list">
               <div className="contact-item">
                 <div className="contact-icon" aria-hidden="true">
-                  <Icon>
-                    <path d="M21 10c0 7-9 12-9 12S3 17 3 10a9 9 0 1 1 18 0Z" />
-                    <circle cx="12" cy="10" r="3" />
-                  </Icon>
+                  <MapPin {...iconProps} />
                 </div>
                 <div>
                   <strong>Address</strong>
@@ -1293,9 +1238,7 @@ function Hero() {
 
               <div className="contact-item">
                 <div className="contact-icon" aria-hidden="true">
-                  <Icon>
-                    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.2 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.35 1.78.68 2.62a2 2 0 0 1-.45 2.11L8.07 9.73a16 16 0 0 0 6.2 6.2l1.28-1.27a2 2 0 0 1 2.11-.45c.84.33 1.72.56 2.62.68A2 2 0 0 1 22 16.92Z" />
-                  </Icon>
+                  <Phone {...iconProps} />
                 </div>
                 <div>
                   <strong>Contact Number</strong>
@@ -1305,12 +1248,7 @@ function Hero() {
 
               <div className="contact-item">
                 <div className="contact-icon" aria-hidden="true">
-                  <Icon>
-                    <path d="M8 2v4" />
-                    <path d="M16 2v4" />
-                    <rect x="3" y="4" width="18" height="18" rx="2" />
-                    <path d="M3 10h18" />
-                  </Icon>
+                  <Clock {...iconProps} />
                 </div>
                 <div>
                   <strong>Public Hours</strong>
@@ -1320,11 +1258,7 @@ function Hero() {
 
               <div className="contact-item">
                 <div className="contact-icon" aria-hidden="true">
-                  <Icon>
-                    <path d="M18 2h3v3" />
-                    <path d="M8 14 21 2" />
-                    <path d="M21 8v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-                  </Icon>
+                  <FacebookGlyph size={21} />
                 </div>
                 <div>
                   <strong>Facebook Page</strong>
@@ -1368,12 +1302,7 @@ function AboutSection() {
           <div className="feature-list">
             <article className="feature-card">
               <div className="feature-icon" aria-hidden="true">
-                <Icon>
-                  <path d="M4 20h16" />
-                  <path d="M7 20V10" />
-                  <path d="M12 20V4" />
-                  <path d="M17 20v-6" />
-                </Icon>
+                <Stethoscope {...iconProps} />
               </div>
               <div>
                 <strong>Multi-specialty care</strong>
@@ -1383,10 +1312,7 @@ function AboutSection() {
 
             <article className="feature-card">
               <div className="feature-icon" aria-hidden="true">
-                <Icon>
-                  <path d="M21 10c0 7-9 12-9 12S3 17 3 10a9 9 0 1 1 18 0Z" />
-                  <circle cx="12" cy="10" r="3" />
-                </Icon>
+                <MapPin {...iconProps} />
               </div>
               <div>
                 <strong>Convenient Alabang location</strong>
@@ -1396,14 +1322,7 @@ function AboutSection() {
 
             <article className="feature-card">
               <div className="feature-icon" aria-hidden="true">
-                <Icon>
-                  <path d="M3 7h18" />
-                  <path d="M7 3v4" />
-                  <path d="M17 3v4" />
-                  <rect x="3" y="5" width="18" height="16" rx="2" />
-                  <path d="M8 11h8" />
-                  <path d="M8 15h5" />
-                </Icon>
+                <CalendarCheck {...iconProps} />
               </div>
               <div>
                 <strong>Patient-friendly access</strong>
@@ -1431,16 +1350,19 @@ function DepartmentsSection() {
         </div>
 
         <div className="departments-grid">
-          {departments.map((department) => (
-            <article className="dept-card" key={department.title}>
-              <div className="dept-icon" aria-hidden="true">
-                <Icon>{department.icon}</Icon>
-              </div>
-              <h3>{department.title}</h3>
-              <p>{department.body}</p>
-              <span className="dept-chip">{department.chip}</span>
-            </article>
-          ))}
+          {departments.map((department) => {
+            const DeptIcon = department.icon;
+            return (
+              <article className="dept-card" key={department.title}>
+                <div className="dept-icon" aria-hidden="true">
+                  <DeptIcon {...iconProps} />
+                </div>
+                <h3>{department.title}</h3>
+                <p>{department.body}</p>
+                <span className="dept-chip">{department.chip}</span>
+              </article>
+            );
+          })}
         </div>
       </div>
     </section>
@@ -1481,7 +1403,10 @@ function VisitSection() {
               Review the clinic location, public hours, departments, and contact details before your visit. Returning users may continue to the login portal for online clinic access.
             </p>
           </div>
-          <a className="btn btn-primary" href="/login">Proceed to Login</a>
+          <Link className="btn btn-primary" to="/login">
+            Proceed to Login
+            <ArrowRight size={18} strokeWidth={2.4} />
+          </Link>
         </div>
       </div>
     </section>
