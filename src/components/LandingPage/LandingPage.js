@@ -356,6 +356,7 @@ const styles = `
     letter-spacing: -0.045em;
     max-width: 760px;
     margin-bottom: 18px;
+    text-wrap: balance;
   }
 
   .hero-lead {
