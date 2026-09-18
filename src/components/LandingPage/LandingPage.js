@@ -353,8 +353,9 @@ const styles = `
 
   .hero-title {
     font-size: clamp(2.7rem, 5.4vw, 5rem);
-    line-height: 0.98;
-    letter-spacing: -0.045em;
+    font-weight: 800;
+    line-height: 1.0;
+    letter-spacing: -0.03em;
     max-width: 760px;
     margin-bottom: 18px;
     text-wrap: balance;
@@ -1157,7 +1158,7 @@ function Hero() {
           <div className="hero-top">
             <div className="eyebrow">
               <span className="dot" />
-              Multi-specialty clinic in Alabang
+              Multi-Specialty Clinic in Alabang
             </div>
           </div>
 
