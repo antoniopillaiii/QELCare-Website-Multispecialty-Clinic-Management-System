@@ -395,7 +395,7 @@ function UserModal({ user, roles, specialties, mode, onClose, onSave, saving }) 
           </button>
         </div>
 
-        <div style={{ padding: 24, background: "#fafbfd", flex: 1, minHeight: 0, overflowY: "auto" }}>
+        <div style={{ padding: "24px 24px 0", background: "#fafbfd", flex: 1, minHeight: 0, overflowY: "auto" }}>
           {error && (
             <div style={{ marginBottom: 16, padding: "12px 14px", borderRadius: 10, background: "#fff2f4", color: C.danger, border: "1px solid #f7c5cb", fontSize: 13, fontWeight: 700 }}>
               {error}
@@ -420,7 +420,7 @@ function UserModal({ user, roles, specialties, mode, onClose, onSave, saving }) 
                 <ReadOnly label="Joined" value={formatDate(user.created_at, true)} />
                 <ReadOnly label="Last Login" value={formatDate(user.last_login, true)} />
               </div>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, position: "sticky", bottom: 0, margin: "0 -24px -24px", padding: "16px 24px", background: "#fafbfd", borderTop: `1px solid ${C.border}` }}>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, position: "sticky", bottom: 0, margin: "0 -24px 0", padding: "16px 24px", background: "#fafbfd", borderTop: `1px solid ${C.border}` }}>
                 <Button onClick={onClose}>Close</Button>
               </div>
             </div>
@@ -509,7 +509,7 @@ function UserModal({ user, roles, specialties, mode, onClose, onSave, saving }) 
                 )}
               </div>
 
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, position: "sticky", bottom: 0, margin: "0 -24px -24px", padding: "16px 24px", background: "#fafbfd", borderTop: `1px solid ${C.border}` }}>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, position: "sticky", bottom: 0, margin: "0 -24px 0", padding: "16px 24px", background: "#fafbfd", borderTop: `1px solid ${C.border}` }}>
                 <Button onClick={onClose} disabled={saving}>Cancel</Button>
                 <Button variant="primary" type="submit" disabled={saving}>{saving ? "Saving..." : isEdit ? "Update User" : "Create User"}</Button>
               </div>
