@@ -102,7 +102,7 @@ export default function UserScreen() {
     if (nextAppointment?.status === "PENDING") rows.push("Your appointment request is waiting for clinic confirmation.");
     if (nextAppointment?.status === "CONFIRMED") rows.push("Your appointment is confirmed. Please arrive on time for queue processing.");
     if (nextAppointment?.status === "IN_QUEUE") rows.push("You are currently in the clinic queue.");
-    if (latestRecord) rows.push("A doctor medical record is available in My Records.");
+    if (latestRecord) rows.push("A doctor medical record is available in Consultation Records.");
     if (prescriptions > 0) rows.push("Prescription details are available in Medications & Documents.");
     return rows.slice(0, 4);
   }, [latestRecord, nextAppointment, prescriptions]);

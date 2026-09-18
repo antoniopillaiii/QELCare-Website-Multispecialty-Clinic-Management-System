@@ -51,7 +51,7 @@ const NAV_BY_ROLE = {
     { id: "profile", label: "Profile Settings", icon: Icons.profile, path: "/frontdesk/profile" },
   ],
   Nurse: [
-    { id: "station", label: "Nurse Station", icon: Icons.nurseQueue, path: "/nurse-station" },
+    { id: "station", label: "Nurse Dashboard", icon: Icons.nurseQueue, path: "/nurse-station" },
     { id: "appointments", label: "Appointments", icon: Icons.appointments, path: "/nurse/appointments" },
     { id: "profile", label: "Profile Settings", icon: Icons.profile, path: "/nurse/profile" },
   ],
@@ -186,7 +186,7 @@ export default function Sidebar({ open = true, onNavigate }) {
         <button
           type="button"
           onClick={logout}
-          title={!open ? "Logout" : undefined}
+          title={!open ? "Sign Out" : undefined}
           style={{
             display: "flex",
             alignItems: "center",
@@ -210,7 +210,7 @@ export default function Sidebar({ open = true, onNavigate }) {
           }}
         >
           <span style={{ flexShrink: 0, display: "flex" }}>{Icons.logout}</span>
-          {open && <span>Logout</span>}
+          {open && <span>Sign Out</span>}
         </button>
       </div>
     </aside>

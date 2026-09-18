@@ -321,7 +321,7 @@ export default function MedicalRecords({ appointment, latestVital, onCreated }) 
 
       <Panel style={{ overflow: "hidden" }}>
         <div style={{ padding: "14px 16px", borderBottom: "1px solid #e8eef6" }}>
-          <div style={{ fontSize: 15, fontWeight: 900, color: "#162235" }}>{isPatient ? "My Medical Records" : "Medical Records"}</div>
+          <div style={{ fontSize: 15, fontWeight: 900, color: "#162235" }}>{isPatient ? "Consultation Records" : "Medical Records"}</div>
           <div style={{ fontSize: 12, color: "#6b778c", marginTop: 2 }}>{records.length} record(s)</div>
         </div>
 

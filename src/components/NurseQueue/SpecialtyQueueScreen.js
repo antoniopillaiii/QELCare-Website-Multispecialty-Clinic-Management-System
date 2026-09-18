@@ -199,7 +199,7 @@ export default function SpecialtyQueueScreen({ slug, specialtyName }) {
               <input style={inputStyle} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
             </Field>
             <ActionButton tone="secondary" onClick={load}>Refresh</ActionButton>
-            <ActionButton tone="secondary" onClick={() => navigate("/nurse-station")}>Nurse Station</ActionButton>
+            <ActionButton tone="secondary" onClick={() => navigate("/nurse-station")}>Nurse Dashboard</ActionButton>
           </div>
         </Panel>
 

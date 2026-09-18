@@ -50,7 +50,7 @@ const PAGE_TITLES = {
   "/admin/reports": { title: "Reports & Analytics", sub: "System analytics and reports" },
   "/admin/logs": { title: "Activity Logs", sub: "Recent administrative activity" },
   "/admin/profile": { title: "Profile Settings", sub: "Your account preferences" },
-  "/nurse-station": { title: "Nurse Station", sub: "Patient vitals and queue" },
+  "/nurse-station": { title: "Nurse Dashboard", sub: "Patient vitals and queue" },
   "/doctor/dashboard": { title: "Doctor Dashboard", sub: "Queued patients and consultation records" },
   "/frontdesk/dashboard": { title: "Frontdesk Dashboard", sub: "Confirm appointments and check-ins" },
   "/frontdesk/appointments": { title: "Frontdesk Appointments", sub: "Confirm, reschedule, and cancel active visits" },
@@ -589,7 +589,7 @@ export default function Topbar({ sideOpen, onToggle, pageTitle, pageSubtitle }) 
                 transition: ".13s",
               }}>
                 <span style={{ display: "flex" }}><LogoutIcon /></span>
-                Logout
+                Sign Out
               </button>
             </div>
           )}

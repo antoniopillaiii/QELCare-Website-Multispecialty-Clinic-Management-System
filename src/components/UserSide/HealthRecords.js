@@ -869,7 +869,7 @@ export default function HealthRecords() {
     <div style={{ display: "grid", gap: 16 }}>
       <Panel style={{ padding: 0, overflow: "hidden" }}>
         <div style={{ padding: "16px 16px 0" }}>
-          <div style={{ fontSize: 18, fontWeight: 900, color: "#162235" }}>My Health Records</div>
+          <div style={{ fontSize: 18, fontWeight: 900, color: "#162235" }}>Medications & Documents</div>
           <div style={{ color: "#6b778c", fontSize: 13, marginTop: 3 }}>Track your medications and store your medical documents in one place.</div>
         </div>
         <div style={{ display: "flex", gap: 4, padding: "10px 12px 0", borderBottom: "1px solid #e8eef6" }}>
