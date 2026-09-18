@@ -129,3 +129,13 @@ img { max-width: 100%; height: auto; }
 
 /* Horizontal-scroll helper for steppers / chip rows that shouldn't wrap. */
 .qc-hscroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* Table action-button groups: keep buttons on one line on desktop (the table
+   scrolls horizontally via its overflow-x container when space is tight), but
+   allow wrapping inside the stacked mobile cards. Fixes uneven row heights
+   where a wide button (e.g. "Approve and Queue") pushed one button to line 2. */
+.qc-actions { flex-wrap: nowrap; }
+.qc-actions > * { flex-shrink: 0; white-space: nowrap; }
+@media (max-width: 640px) {
+  .qc-actions { flex-wrap: wrap; }
+}

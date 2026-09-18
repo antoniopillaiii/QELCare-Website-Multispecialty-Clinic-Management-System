@@ -319,7 +319,7 @@ function AppointmentRow({ appointment, onStatus, onReschedule }) {
         </div>
       </td>
       <td data-label="Actions" className="qc-td-block" style={{ ...tdStyle, textAlign: "right" }}>
-        <div style={{ display: "inline-flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+        <div className="qc-actions" style={{ display: "inline-flex", gap: 8, justifyContent: "flex-end" }}>
           {needsSettle ? (
             <>
               <span style={{ color: C.amber, fontSize: 12, fontWeight: 800, alignSelf: "center" }}>Past — settle:</span>
