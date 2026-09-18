@@ -135,7 +135,7 @@ export default function FrontDesk() {
                     <td data-label="Specialty" style={{ padding: "12px 14px" }}>{item.specialty_name || "-"}</td>
                     <td data-label="Status" style={{ padding: "12px 14px" }}><StatusBadge status={item.status} /></td>
                     <td data-label="Action" className="qc-td-block" style={{ padding: "12px 14px" }}>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <div className="qc-actions" style={{ display: "flex", gap: 6 }}>
                         {["PENDING", "RESCHEDULED"].includes(item.status) && (
                           <ActionButton disabled={savingId === item.id} tone="success" onClick={() => updateStatus(item, "CONFIRMED")}>
                             {isToday ? "Approve and Queue" : "Approve"}

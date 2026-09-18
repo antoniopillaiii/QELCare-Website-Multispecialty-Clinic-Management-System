@@ -863,7 +863,7 @@ export default function AdminQueue() {
                         <div>Done: {formatDateTime(entry.completed_at)}</div>
                       </td>
                       <td data-label="Actions" className="qc-td-block" style={{ padding: "13px 14px" }}>
-                        <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                        <div className="qc-actions" style={{ display: "flex", gap: 7 }}>
                           {entry.status === "WAITING" && (
                             <>
                               <ActionButton

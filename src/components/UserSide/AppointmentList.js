@@ -368,7 +368,7 @@ export default function AppointmentList() {
                         {canManage && !rowHistory ? (
                           <div style={{ display: "grid", gap: 7 }}>
                             <div style={{ color: "#6b778c", fontSize: 12 }}>{workflowHelp(item.status, false, false)}</div>
-                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            <div className="qc-actions" style={{ display: "flex", gap: 6 }}>
                               {item.status === "PENDING" && <ActionButton disabled={savingId === item.id} tone="success" onClick={() => changeStatus(item, "CONFIRMED")}>Confirm</ActionButton>}
                               {["PENDING", "CONFIRMED", "RESCHEDULED"].includes(item.status) && <ActionButton disabled={savingId === item.id} tone="secondary" onClick={() => setReschedule({ id: item.id, patient_name: item.patient_name, date: item.date || todayISO(), time: item.time || "" })}>Reschedule</ActionButton>}
                               {["PENDING", "CONFIRMED", "RESCHEDULED"].includes(item.status) && <ActionButton disabled={savingId === item.id} tone="danger" onClick={() => setCancelTarget(item)}>Cancel</ActionButton>}
