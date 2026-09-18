@@ -3,6 +3,7 @@ import MainLayout from "../../Layout/MainLayout";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C } from "../../../utils/adminTheme";
+import { X } from "lucide-react";
 
 const EXPORT_COLUMNS = [
   { header: "Record", value: (record) => `MR-${String(recordId(record)).padStart(5, "0")}` },
@@ -145,7 +146,7 @@ function RecordViewModal({ record, onClose }) {
             <div style={{ fontSize: 18, fontWeight: 900 }}>Medical Record #{recordId(record)}</div>
             <div style={{ fontSize: 12, opacity: 0.78, marginTop: 3 }}>{record.patient_name || "Unknown patient"} / {formatDate(record.visit_date)}</div>
           </div>
-          <button onClick={onClose} style={{ width: 34, height: 34, border: "none", borderRadius: 8, background: "rgba(255,255,255,.12)", color: "#fff", cursor: "pointer", fontSize: 20 }}>x</button>
+          <button onClick={onClose} aria-label="Close" style={{ width: 34, height: 34, border: "none", borderRadius: 8, background: "rgba(255,255,255,.12)", color: "#fff", cursor: "pointer", display: "grid", placeItems: "center" }}><X size={18} /></button>
         </div>
 
         <div style={{ padding: 22, background: "#fafbfd", overflowY: "auto", maxHeight: "calc(90vh - 74px)", display: "grid", gap: 16 }}>
@@ -306,7 +307,7 @@ function RecordFormModal({ record, patients, doctors, appointments, saving, onCl
             <div style={{ fontSize: 18, fontWeight: 900 }}>{isEdit ? `Edit Medical Record #${recordId(record)}` : "Create Medical Record"}</div>
             <div style={{ fontSize: 12, opacity: 0.78, marginTop: 3 }}>Doctor-authored clinical documentation</div>
           </div>
-          <button onClick={onClose} style={{ width: 34, height: 34, border: "none", borderRadius: 8, background: "rgba(255,255,255,.12)", color: "#fff", cursor: "pointer", fontSize: 20 }}>x</button>
+          <button onClick={onClose} aria-label="Close" style={{ width: 34, height: 34, border: "none", borderRadius: 8, background: "rgba(255,255,255,.12)", color: "#fff", cursor: "pointer", display: "grid", placeItems: "center" }}><X size={18} /></button>
         </div>
 
         <form onSubmit={submit} style={{ padding: 22, background: "#fafbfd", overflowY: "auto", maxHeight: "calc(90vh - 74px)", display: "grid", gap: 16 }}>

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import MainLayout from "../../Layout/MainLayout";
+import { X } from "lucide-react";
 
 const NAVY = "#0f2744";
 const MUTED = "#5a6a7e";
@@ -215,7 +216,7 @@ export default function AdminInquiries() {
           <div onClick={(e) => e.stopPropagation()} style={{ width: "min(560px, 96vw)", maxHeight: "90vh", overflowY: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 24px 64px rgba(14,35,64,.28)" }}>
             <div style={{ position: "sticky", top: 0, background: "#fff", borderBottom: `1px solid ${BORDER}`, padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h3 style={{ margin: 0, color: NAVY, fontSize: 18, fontWeight: 900 }}>Inquiry #{active.inquiry_id}</h3>
-              <button onClick={() => setActive(null)} aria-label="Close" style={{ border: 0, background: BG, color: NAVY, width: 34, height: 34, borderRadius: 10, fontSize: 18, fontWeight: 900, cursor: "pointer" }}>×</button>
+              <button onClick={() => setActive(null)} aria-label="Close" style={{ border: 0, background: BG, color: NAVY, width: 34, height: 34, borderRadius: 10, cursor: "pointer", display: "grid", placeItems: "center" }}><X size={18} /></button>
             </div>
             <div style={{ padding: "16px 20px 22px", display: "grid", gap: 12 }}>
               <Detail label="From" value={active.full_name} />

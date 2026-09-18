@@ -4,6 +4,7 @@ import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C } from "../../../utils/adminTheme";
 import ConfirmModal from "../../common/ConfirmModal";
+import { X } from "lucide-react";
 
 const EXPORT_COLUMNS = [
   { header: "Patient ID", value: (patient) => `#${patient.id}` },
@@ -277,7 +278,7 @@ function PatientModal({ mode, patient, saving, onClose, onSave }) {
             <div style={{ fontSize: 18, fontWeight: 900 }}>{isView ? "Patient Details" : isEdit ? "Edit Patient" : "Add Patient"}</div>
             <div style={{ fontSize: 12, opacity: 0.78, marginTop: 3 }}>{patient ? `Patient ID #${patient.id}` : "Create a clinical patient record"}</div>
           </div>
-          <button onClick={onClose} style={{ width: 34, height: 34, border: "none", borderRadius: 8, background: "rgba(255,255,255,.12)", color: "#fff", cursor: "pointer", fontSize: 20 }}>x</button>
+          <button onClick={onClose} aria-label="Close" style={{ width: 34, height: 34, border: "none", borderRadius: 8, background: "rgba(255,255,255,.12)", color: "#fff", cursor: "pointer", display: "grid", placeItems: "center" }}><X size={18} /></button>
         </div>
 
         {isView ? (

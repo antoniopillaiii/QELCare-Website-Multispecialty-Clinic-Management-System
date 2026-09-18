@@ -62,8 +62,6 @@ function LockoutCountdown({ until, onExpired }) {
 
 // """ Styles """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 const styles = `
-  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=DM+Serif+Display:ital@0;1&display=swap');
-
   :root {
     --navy:   #0e2340;
     --navy-2: #163a6b;
@@ -81,7 +79,7 @@ const styles = `
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body, #root { height: 100%; overflow: hidden; }
-  body { font-family: 'DM Sans', system-ui, sans-serif; background: linear-gradient(135deg, #eef2fb 0%, #f4f7fc 60%, #eaf0f9 100%); }
+  body { font-family: 'Inter', system-ui, sans-serif; background: linear-gradient(135deg, #eef2fb 0%, #f4f7fc 60%, #eaf0f9 100%); }
   button, input { font: inherit; outline: none; }
 
   /* Restore a clear keyboard focus ring for buttons, links, and checkboxes
@@ -157,8 +155,8 @@ const styles = `
   }
   .ls-eyebrow-dot { width: 7px; height: 7px; border-radius: 50%; background: #5eead4; box-shadow: 0 0 0 4px rgba(94,234,212,.18); }
 
-  .ls-brand h1 { font-family: 'DM Serif Display', Georgia, serif; font-size: clamp(1.9rem, 2.8vw, 2.9rem); line-height: 1.08; letter-spacing: -.02em; font-weight: 400; margin-bottom: 12px; }
-  .ls-brand h1 em { font-style: italic; color: rgba(255,255,255,.75); }
+  .ls-brand h1 { font-size: clamp(1.9rem, 2.8vw, 2.9rem); line-height: 1.1; letter-spacing: -.03em; font-weight: 800; margin-bottom: 12px; }
+  .ls-brand h1 em { font-style: normal; color: rgba(255,255,255,.72); }
   .ls-brand-desc { color: rgba(255,255,255,.65); font-size: .86rem; line-height: 1.68; max-width: 380px; margin-bottom: 26px; }
 
   .ls-features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
@@ -177,7 +175,7 @@ const styles = `
   .ls-form-inner { width: 100%; max-width: 360px; }
 
   .ls-form-head { margin-bottom: 20px; }
-  .ls-form-head h2 { font-family: 'DM Serif Display', Georgia, serif; font-size: 1.85rem; font-weight: 400; letter-spacing: -.02em; color: var(--ink); margin-bottom: 5px; }
+  .ls-form-head h2 { font-size: 1.7rem; font-weight: 800; letter-spacing: -.03em; color: var(--ink); margin-bottom: 5px; }
   .ls-form-head p { color: var(--muted); font-size: .84rem; line-height: 1.6; }
 
   .ls-badge { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border-radius: 999px; background: #f0fdf9; border: 1px solid #bbf0de; color: var(--teal); font-size: .74rem; font-weight: 700; margin-bottom: 18px; }
@@ -666,7 +664,7 @@ export default function LoginScreen() {
 
       {showInquiry && (
         <div onClick={() => setShowInquiry(false)} style={{ position: "fixed", inset: 0, background: "rgba(8,18,33,.5)", display: "grid", placeItems: "center", padding: 16, zIndex: 100 }}>
-          <div role="dialog" aria-modal="true" aria-labelledby="ls-inq-title" onClick={e => e.stopPropagation()} style={{ width: "min(520px, 96vw)", maxHeight: "90vh", overflowY: "auto", background: "#fff", borderRadius: 16, boxShadow: "0 24px 64px rgba(14,35,64,.28)", fontFamily: "'DM Sans', system-ui, sans-serif" }}>
+          <div role="dialog" aria-modal="true" aria-labelledby="ls-inq-title" onClick={e => e.stopPropagation()} style={{ width: "min(520px, 96vw)", maxHeight: "90vh", overflowY: "auto", background: "#fff", borderRadius: 16, boxShadow: "0 24px 64px rgba(14,35,64,.28)", fontFamily: "inherit" }}>
             <div style={{ position: "sticky", top: 0, background: "#fff", borderBottom: "1px solid #e8eef6", padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
               <h3 id="ls-inq-title" style={{ margin: 0, fontSize: 18, fontWeight: 900, color: "#0e2340", display: "flex", alignItems: "center", gap: 9 }}>
                 <span style={{ width: 32, height: 32, borderRadius: 9, background: "#eef4fb", color: "#163a6b", display: "grid", placeItems: "center", flexShrink: 0 }}><InquiryIcon size={17} /></span>

@@ -16,7 +16,10 @@ import AnalyticsReports from "./components/AdminFeatures/ReportsAndAnalytics/ind
 import AppointmentAnalyticsReport from "./components/AdminFeatures/ReportsAndAnalytics/AppointmentAnalyticsReport";
 import MedicalRecordReport from "./components/AdminFeatures/ReportsAndAnalytics/MedicalRecordReport";
 import UserStatisticsReport from "./components/AdminFeatures/ReportsAndAnalytics/UserStatisticsReport";
-import { AdminLogs, AdminPatients, AdminQueue, AdminRecords } from "./components/AdminFeatures/Placeholders";
+import AdminLogs from "./components/AdminFeatures/ActivityLogs/AdminLogs";
+import AdminPatients from "./components/AdminFeatures/PatientManagement/AdminPatients";
+import AdminQueue from "./components/AdminFeatures/QueueManagement/AdminQueue";
+import AdminRecords from "./components/AdminFeatures/MedicalRecords/AdminRecords";
 
 import QueueDisplayScreen from "./components/QueueDisplay/QueueDisplayScreen";
 import QNurseStationVitals from "./components/Nurse/QNurseStationVitals";
@@ -194,14 +197,6 @@ export default function App() {
               <HealthRecords />
             </MainLayout>
           ))}
-        />
-        <Route
-          path="/patient/results"
-          element={guard(["Patient"], <Navigate to="/patient/health" replace />)}
-        />
-        <Route
-          path="/patient/medications"
-          element={guard(["Patient"], <Navigate to="/patient/health" replace />)}
         />
         <Route path="/patient/profile" element={guard(["Patient"], <ProfileSettings />)} />
 

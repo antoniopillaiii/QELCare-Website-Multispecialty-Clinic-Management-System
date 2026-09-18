@@ -4,6 +4,7 @@ import { API_URL, authFetch, getToken } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C } from "../../../utils/adminTheme";
 import ConfirmModal from "../../common/ConfirmModal";
+import { X } from "lucide-react";
 
 const EXPORT_COLUMNS = [
   { header: "Username", value: (user) => user.username || "" },
@@ -389,8 +390,8 @@ function UserModal({ user, roles, specialties, mode, onClose, onSave, saving }) 
             <div style={{ fontSize: 18, fontWeight: 900 }}>{isView ? "View User" : isEdit ? "Edit User" : "Add User"}</div>
             <div style={{ fontSize: 12, opacity: 0.78, marginTop: 3 }}>{user?.email || "Create a backend-synced account"}</div>
           </div>
-          <button onClick={onClose} style={{ width: 34, height: 34, borderRadius: 8, border: "none", background: "rgba(255,255,255,.12)", color: "#fff", cursor: "pointer", fontSize: 22 }}>
-            x
+          <button onClick={onClose} aria-label="Close" style={{ width: 34, height: 34, borderRadius: 8, border: "none", background: "rgba(255,255,255,.12)", color: "#fff", cursor: "pointer", display: "grid", placeItems: "center" }}>
+            <X size={18} />
           </button>
         </div>
 

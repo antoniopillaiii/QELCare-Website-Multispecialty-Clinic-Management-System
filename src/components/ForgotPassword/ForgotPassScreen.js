@@ -22,8 +22,6 @@ function ShieldIcon() {
 }
 
 const styles = `
-  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=DM+Serif+Display:ital@0;1&display=swap');
-
   :root {
     --navy: #0e2340; --navy-2: #163a6b; --navy-3: #1e4d8c;
     --blue: #2d6be4; --teal: #0e8a7a;
@@ -31,7 +29,7 @@ const styles = `
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body, #root { height: 100%; overflow: hidden; }
-  body { font-family: 'DM Sans', system-ui, sans-serif; background: linear-gradient(135deg, #eef2fb 0%, #f4f7fc 60%, #eaf0f9 100%); }
+  body { font-family: 'Inter', system-ui, sans-serif; background: linear-gradient(135deg, #eef2fb 0%, #f4f7fc 60%, #eaf0f9 100%); }
   button, input { font: inherit; outline: none; border: none; }
 
   .fp-page { height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
@@ -77,10 +75,9 @@ const styles = `
   .fp-eyebrow-dot { width: 7px; height: 7px; border-radius: 50%; background: #5eead4; box-shadow: 0 0 0 4px rgba(94,234,212,.18); }
 
   .fp-brand h1 {
-    font-family: 'DM Serif Display', Georgia, serif;
-    font-size: clamp(1.9rem, 2.8vw, 2.9rem); line-height: 1.08; letter-spacing: -.02em; font-weight: 400; margin-bottom: 12px;
+    font-size: clamp(1.9rem, 2.8vw, 2.9rem); line-height: 1.1; letter-spacing: -.03em; font-weight: 800; margin-bottom: 12px;
   }
-  .fp-brand h1 em { font-style: italic; color: rgba(255,255,255,.75); }
+  .fp-brand h1 em { font-style: normal; color: rgba(255,255,255,.72); }
   .fp-brand-desc { color: rgba(255,255,255,.65); font-size: .86rem; line-height: 1.68; max-width: 380px; margin-bottom: 28px; }
 
   /* step cards */
@@ -115,7 +112,7 @@ const styles = `
   .fp-back:hover { color: var(--blue); transform: translateX(-2px); }
 
   .fp-form-head { margin-bottom: 20px; }
-  .fp-form-head h2 { font-family: 'DM Serif Display', Georgia, serif; font-size: 1.85rem; font-weight: 400; letter-spacing: -.02em; color: var(--ink); margin-bottom: 5px; }
+  .fp-form-head h2 { font-size: 1.7rem; font-weight: 800; letter-spacing: -.03em; color: var(--ink); margin-bottom: 5px; }
   .fp-form-head p { color: var(--muted); font-size: .84rem; line-height: 1.6; }
 
   .fp-badge { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border-radius: 999px; background: #f0fdf9; border: 1px solid #bbf0de; color: var(--teal); font-size: .74rem; font-weight: 700; margin-bottom: 18px; }

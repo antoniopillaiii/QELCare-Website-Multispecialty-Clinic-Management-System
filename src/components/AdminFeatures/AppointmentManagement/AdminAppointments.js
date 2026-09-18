@@ -4,6 +4,7 @@ import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C } from "../../../utils/adminTheme";
 import ReasonModal from "../../common/ReasonModal";
+import { X } from "lucide-react";
 
 const EXPORT_COLUMNS = [
   { header: "Reference", value: (appt) => `APT-${String(appt.id).padStart(5, "0")}` },
@@ -220,7 +221,7 @@ function AppointmentModal({ mode, appointment, patients, doctors, specialties, s
             <div style={{ fontSize: 18, fontWeight: 900 }}>{isEdit ? "Reschedule Appointment" : "Create Appointment"}</div>
             <div style={{ fontSize: 12, opacity: 0.78, marginTop: 3 }}>{isEdit ? `Appointment #${appointment.id}` : "Book an existing patient with a clinic doctor"}</div>
           </div>
-          <button onClick={onClose} style={{ width: 34, height: 34, border: "none", borderRadius: 8, background: "rgba(255,255,255,.12)", color: "#fff", cursor: "pointer", fontSize: 20 }}>x</button>
+          <button onClick={onClose} aria-label="Close" style={{ width: 34, height: 34, border: "none", borderRadius: 8, background: "rgba(255,255,255,.12)", color: "#fff", cursor: "pointer", display: "grid", placeItems: "center" }}><X size={18} /></button>
         </div>
 
         <form onSubmit={submit} style={{ padding: 24, background: "#fafbfd", maxHeight: "calc(90vh - 74px)", overflowY: "auto", display: "grid", gap: 16 }}>

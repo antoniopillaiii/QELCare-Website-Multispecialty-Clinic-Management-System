@@ -1,4 +1,5 @@
 import React, { useEffect } from "react";
+import { X } from "lucide-react";
 
 // Reusable in-app modal shell used across the app (admin, frontdesk, patient,
 // doctor). Renders a fixed overlay with a centered card: a coloured header
@@ -95,11 +96,11 @@ export default function Modal({
                 background: "rgba(255,255,255,.14)",
                 color: "#fff",
                 cursor: "pointer",
-                fontSize: 20,
-                lineHeight: 1,
+                display: "grid",
+                placeItems: "center",
               }}
             >
-              &times;
+              <X size={18} />
             </button>
           )}
         </div>

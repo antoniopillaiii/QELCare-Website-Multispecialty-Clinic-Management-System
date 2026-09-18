@@ -201,7 +201,7 @@ Every protected route sits behind JWT authentication and an explicit role check 
 
 ## License
 
-No open-source license has been declared for this repository, so all rights are reserved by the author by default. Please contact the maintainer before reusing the code.
+No open-source license has been declared for this repository, so all rights are reserved by th author by default. Please contact the maintainer before reusing the code.
 
 ## Contact
 

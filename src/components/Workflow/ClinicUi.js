@@ -112,9 +112,9 @@ export function ActionButton({ children, tone = "primary", style, type = "button
       type={type}
       {...props}
       style={{
-        minHeight: 36,
-        padding: "0 13px",
-        borderRadius: 8,
+        minHeight: 38,
+        padding: "0 14px",
+        borderRadius: 10,
         border: `1px solid ${t.border}`,
         background: t.background,
         color: t.color,
