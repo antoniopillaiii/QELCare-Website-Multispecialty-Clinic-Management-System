@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import MainLayout from "../../Layout/MainLayout";
+import Pagination, { usePagination } from "../../common/Pagination";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 
@@ -197,6 +198,13 @@ function AdminBilling() {
     });
   }, [filters, normalizedTransactions]);
 
+  // Paginate the filtered rows; changing any filter returns to page 1.
+  const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(
+    visibleTransactions,
+    10,
+    JSON.stringify(filters)
+  );
+
   const summary = useMemo(() => {
     const today = new Date();
     const stats = dashboard?.stats || dashboard || {};
@@ -345,7 +353,7 @@ function AdminBilling() {
                     </td>
                   </tr>
                 ) : (
-                  visibleTransactions.map((transaction) => (
+                  pageItems.map((transaction) => (
                     <tr key={transaction.billing_id || transaction.id || transaction.reference}>
                       <td data-label="OR / Reference">
                         <strong>{transaction.reference}</strong>
@@ -369,6 +377,17 @@ function AdminBilling() {
               </tbody>
             </table>
           </div>
+
+          {!loading && (
+            <Pagination
+              page={page}
+              totalPages={totalPages}
+              totalItems={totalItems}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              label="transactions"
+            />
+          )}
         </div>
       </div>
 

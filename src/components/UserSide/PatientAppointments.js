@@ -15,6 +15,7 @@ import {
   inputStyle,
   todayISO,
 } from "../Workflow/ClinicUi";
+import Pagination, { usePagination } from "../common/Pagination";
 import UserBooking from "./UserBooking";
 import ReasonModal from "../common/ReasonModal";
 import ConfirmModal from "../common/ConfirmModal";
@@ -564,6 +565,11 @@ function RelativesTab() {
 }
 
 function AppointmentTable({ title, rows, emptyTitle, emptyDetail, history = false, actions = null }) {
+  // Paginate here so every tab that renders this table gets the same behaviour.
+  // `title` is the reset key: switching tabs starts at page 1, while a data
+  // refresh keeps the reader on the page they were viewing.
+  const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(rows, 10, title);
+
   return (
     <Panel style={{ overflow: "hidden" }}>
       <div style={{ padding: "14px 16px", borderBottom: "1px solid #e8eef6", display: "flex", justifyContent: "space-between", gap: 12 }}>
@@ -588,7 +594,7 @@ function AppointmentTable({ title, rows, emptyTitle, emptyDetail, history = fals
               </tr>
             </thead>
             <tbody>
-              {rows.map((item) => (
+              {pageItems.map((item) => (
                 <tr key={item.id} style={{ borderTop: "1px solid #eef3f9" }}>
                   <td data-label="Ref" style={{ padding: "12px 14px", color: "#6b778c", fontWeight: 800 }}>#{item.id}</td>
                   <td data-label="Patient" style={{ padding: "12px 14px" }}>
@@ -626,6 +632,15 @@ function AppointmentTable({ title, rows, emptyTitle, emptyDetail, history = fals
           </table>
         </div>
       )}
+
+      <Pagination
+        page={page}
+        totalPages={totalPages}
+        totalItems={totalItems}
+        pageSize={pageSize}
+        onPageChange={setPage}
+        label="appointments"
+      />
     </Panel>
   );
 }

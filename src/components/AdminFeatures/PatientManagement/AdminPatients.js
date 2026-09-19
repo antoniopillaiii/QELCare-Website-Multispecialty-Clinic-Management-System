@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import MainLayout from "../../Layout/MainLayout";
+import Pagination from "../../common/Pagination";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C } from "../../../utils/adminTheme";
@@ -648,16 +649,15 @@ export default function AdminPatients() {
           </table>
         </div>
 
-        {!loading && filtered.length > 0 && (
-          <div style={{ padding: 18, borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ color: C.text, fontSize: 12, fontWeight: 800 }}>
-              Showing {(safePage - 1) * rowsPerPage + 1} to {Math.min(safePage * rowsPerPage, filtered.length)} of {filtered.length}
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <Button disabled={safePage <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Previous</Button>
-              <Button disabled={safePage >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>Next</Button>
-            </div>
-          </div>
+        {!loading && (
+          <Pagination
+            page={safePage}
+            totalPages={totalPages}
+            totalItems={filtered.length}
+            pageSize={rowsPerPage}
+            onPageChange={setPage}
+            label="patients"
+          />
         )}
       </section>
 

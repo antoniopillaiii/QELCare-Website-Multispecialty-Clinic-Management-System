@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { authFetch } from "../../../utils/auth";
+import Pagination, { usePagination } from "../../common/Pagination";
 
 function num(value) {
   const parsed = Number(value);
@@ -138,6 +139,9 @@ function buildPrintableReport(records, metrics, diagnosisRows) {
 export default function MedicalRecordReport() {
   const navigate = useNavigate();
   const [records, setRecords] = useState([]);
+  // Paginate the detail table. This replaces a hard .slice(0, 100) that used to
+  // silently hide every record past the 100th — they are all reachable now.
+  const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(records, 25, "records");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -308,7 +312,7 @@ export default function MedicalRecordReport() {
                   </tr>
                 </thead>
                 <tbody>
-                  {records.slice(0, 100).map((record) => (
+                  {pageItems.map((record) => (
                     <tr key={record.id}>
                       <td style={styles.td}>{formatDate(record.visit_date)}</td>
                       <td style={styles.td}>{record.patient_name}</td>
@@ -319,6 +323,15 @@ export default function MedicalRecordReport() {
                   ))}
                 </tbody>
               </table>
+
+              <Pagination
+                page={page}
+                totalPages={totalPages}
+                totalItems={totalItems}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                label="records"
+              />
             </div>
           )}
         </section>

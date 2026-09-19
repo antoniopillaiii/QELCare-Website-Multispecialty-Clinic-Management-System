@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import MainLayout from "../../Layout/MainLayout";
+import Pagination from "../../common/Pagination";
 import { X } from "lucide-react";
 
 const NAVY = "#0f2744";
@@ -198,15 +199,16 @@ export default function AdminInquiries() {
           </div>
         )}
 
-        {/* Pagination */}
-        {!loading && rows.length > 0 && (
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", borderTop: `1px solid ${BORDER}`, color: MUTED, fontSize: 13 }}>
-            <span>Page {page} of {pages} · {total} total</span>
-            <div style={{ display: "flex", gap: 6 }}>
-              <button disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))} style={pagerBtn(page <= 1)}>Prev</button>
-              <button disabled={page >= pages} onClick={() => setPage((p) => Math.min(pages, p + 1))} style={pagerBtn(page >= pages)}>Next</button>
-            </div>
-          </div>
+        {/* Pagination (server-side: page drives the fetch) */}
+        {!loading && (
+          <Pagination
+            page={page}
+            totalPages={pages}
+            totalItems={total}
+            pageSize={PAGE_SIZE}
+            onPageChange={setPage}
+            label="inquiries"
+          />
         )}
       </div>
 
@@ -257,9 +259,6 @@ export default function AdminInquiries() {
 }
 
 const fieldStyle = { width: "100%", boxSizing: "border-box", border: `1px solid ${BORDER}`, borderRadius: 8, padding: "9px 11px", fontSize: 14, fontFamily: "inherit", color: NAVY, background: "#fafbfd" };
-function pagerBtn(disabled) {
-  return { border: `1px solid ${BORDER}`, background: disabled ? "#f3f6fb" : "#fff", color: disabled ? "#aab6c6" : NAVY, borderRadius: 8, padding: "6px 14px", fontWeight: 800, cursor: disabled ? "not-allowed" : "pointer" };
-}
 function Detail({ label, value, multiline }) {
   return (
     <div>

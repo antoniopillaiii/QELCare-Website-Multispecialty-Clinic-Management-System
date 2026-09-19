@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MainLayout from "../../Layout/MainLayout";
+import Pagination, { usePagination } from "../../common/Pagination";
 import { authFetch } from "../../../utils/auth";
 import { C as COLORS } from "../../../utils/adminTheme";
 
@@ -255,6 +256,13 @@ export default function AdminQueue() {
   const [specialties, setSpecialties] = useState([]);
   const [activeSpecialtyId, setActiveSpecialtyId] = useState(null);
   const [queue, setQueue] = useState([]);
+  // Paginate the live queue. Switching specialty returns to page 1, while the
+  // auto-refresh does not; the bar hides while the queue fits on one page.
+  const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(
+    queue,
+    10,
+    activeSpecialtyId
+  );
   const [loadingSpecialties, setLoadingSpecialties] = useState(true);
   const [loadingQueue, setLoadingQueue] = useState(false);
   const [workingId, setWorkingId] = useState(null);
@@ -792,7 +800,7 @@ export default function AdminQueue() {
                 </tr>
               </thead>
               <tbody>
-                {queue.map((entry) => {
+                {pageItems.map((entry) => {
                   const disabled = workingId === entry.queue_id || !isToday;
                   return (
                     <tr
@@ -973,6 +981,15 @@ export default function AdminQueue() {
             </table>
           </div>
         )}
+
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          totalItems={totalItems}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          label="patients"
+        />
       </div>
 
       {!isToday && (

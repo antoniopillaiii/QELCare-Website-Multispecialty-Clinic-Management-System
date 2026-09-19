@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { authFetch } from "../../../utils/auth";
 import MainLayout from "../../Layout/MainLayout";
+import { PaginatedRows } from "../../common/Pagination";
 import AppointmentList from "../../UserSide/AppointmentList";
 import {
   ActionButton,
@@ -109,17 +110,19 @@ export default function FrontDesk() {
       ) : rows.length === 0 ? (
         <EmptyState title={emptyTitle} detail="" />
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table className="qc-rtable" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: "#f7fafd", color: "#65758b" }}>
-                {["Schedule", "Patient", "Doctor", "Specialty", "Status", "Action"].map((heading) => (
-                  <th key={heading} style={{ textAlign: "left", padding: "11px 14px", fontSize: 11, textTransform: "uppercase" }}>{heading}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((item) => {
+        <PaginatedRows rows={rows} resetKey={title} label="appointments">
+          {(pageRows) => (
+            <div style={{ overflowX: "auto" }}>
+              <table className="qc-rtable" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: "#f7fafd", color: "#65758b" }}>
+                    {["Schedule", "Patient", "Doctor", "Specialty", "Status", "Action"].map((heading) => (
+                      <th key={heading} style={{ textAlign: "left", padding: "11px 14px", fontSize: 11, textTransform: "uppercase" }}>{heading}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+              {pageRows.map((item) => {
                 const isToday = String(item.date || "").slice(0, 10) === today;
                 return (
                   <tr key={item.id} style={{ borderTop: "1px solid #eef3f9" }}>
@@ -155,9 +158,11 @@ export default function FrontDesk() {
                   </tr>
                 );
               })}
-            </tbody>
-          </table>
-        </div>
+                </tbody>
+              </table>
+            </div>
+          )}
+        </PaginatedRows>
       )}
     </Panel>
   );

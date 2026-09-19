@@ -14,6 +14,7 @@ import {
   getRows,
   todayISO,
 } from "../Workflow/ClinicUi";
+import Pagination, { usePagination } from "../common/Pagination";
 import ConfirmModal from "../common/ConfirmModal";
 
 const ACTIVE_STATUSES = ["WAITING", "CALLED", "IN_PROGRESS", "SKIPPED"];
@@ -69,6 +70,15 @@ export default function QNurseStationVitals() {
         return Number(a.queue_number || 0) - Number(b.queue_number || 0);
       });
   }, [queue]);
+
+  // Paginate the live queue. The reset key is constant so the auto-refresh
+  // never yanks the nurse back to page 1 mid-shift; the bar stays hidden
+  // entirely while the queue fits on one page.
+  const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(
+    activeQueue,
+    10,
+    "nurse-queue"
+  );
 
   const stats = useMemo(() => {
     return {
@@ -132,7 +142,7 @@ export default function QNurseStationVitals() {
                   </tr>
                 </thead>
                 <tbody>
-                  {activeQueue.map((entry) => (
+                  {pageItems.map((entry) => (
                     <tr key={entry.queue_id} style={{ borderTop: "1px solid #eef3f9" }}>
                       <td data-label="Queue" style={{ padding: "12px 14px", color: "#163a6b", fontSize: 20, fontWeight: 900 }}>#{entry.queue_number}</td>
                       <td data-label="Patient" className="qc-td-block" style={{ padding: "12px 14px" }}>
@@ -151,6 +161,17 @@ export default function QNurseStationVitals() {
                 </tbody>
               </table>
             </div>
+          )}
+
+          {!loading && (
+            <Pagination
+              page={page}
+              totalPages={totalPages}
+              totalItems={totalItems}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              label="patients"
+            />
           )}
         </Panel>
 

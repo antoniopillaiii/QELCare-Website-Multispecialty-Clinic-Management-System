@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import MainLayout from "../../Layout/MainLayout";
+import Pagination, { usePagination } from "../../common/Pagination";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C } from "../../../utils/adminTheme";
@@ -458,6 +459,13 @@ export default function AdminAppointments() {
     });
   }, [appointments, dateFilter, doctorFilter, search, statusFilter]);
 
+  // Paginate the filtered rows; changing any filter returns to page 1.
+  const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(
+    visibleAppointments,
+    10,
+    `${search}|${statusFilter}|${dateFilter}|${doctorFilter}`
+  );
+
   const saveAppointment = async (payload) => {
     setSaving(true);
     try {
@@ -576,7 +584,7 @@ export default function AdminAppointments() {
             <Button onClick={() => { setSearch(""); setStatusFilter("all"); setDateFilter(""); setDoctorFilter("all"); }}>Clear Filters</Button>
           </div>
           <div style={{ color: C.text, fontSize: 12, fontWeight: 800 }}>
-            Showing {visibleAppointments.length} of {appointments.length} loaded appointment{appointments.length === 1 ? "" : "s"}
+            {visibleAppointments.length} of {appointments.length} loaded appointment{appointments.length === 1 ? "" : "s"} match your filters
           </div>
         </div>
 
@@ -604,7 +612,7 @@ export default function AdminAppointments() {
                   </td>
                 </tr>
               ) : (
-                visibleAppointments.map((appointment) => (
+                pageItems.map((appointment) => (
                   <AppointmentRow
                     key={appointment.id}
                     appointment={appointment}
@@ -616,6 +624,17 @@ export default function AdminAppointments() {
             </tbody>
           </table>
         </div>
+
+        {!loading && (
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            totalItems={totalItems}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            label="appointments"
+          />
+        )}
       </section>
 
       {modal && (

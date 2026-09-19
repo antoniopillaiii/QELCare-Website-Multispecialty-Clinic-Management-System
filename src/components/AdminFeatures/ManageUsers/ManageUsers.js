@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import MainLayout from "../../Layout/MainLayout";
+import Pagination from "../../common/Pagination";
 import { API_URL, authFetch, getToken } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C } from "../../../utils/adminTheme";
@@ -883,14 +884,15 @@ export default function ManageUsers() {
           )}
         </div>
 
-        {!loading && totalPages > 1 && (
-          <div style={{ padding: 18, borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ color: C.text, fontSize: 12, fontWeight: 800 }}>Page {page} of {totalPages}</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <Button disabled={page <= 1} onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}>Previous</Button>
-              <Button disabled={page >= totalPages} onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}>Next</Button>
-            </div>
-          </div>
+        {!loading && (
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            totalItems={filteredUsers.length}
+            pageSize={itemsPerPage}
+            onPageChange={setCurrentPage}
+            label="users"
+          />
         )}
       </section>
 

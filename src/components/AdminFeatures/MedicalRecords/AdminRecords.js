@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import MainLayout from "../../Layout/MainLayout";
+import Pagination, { usePagination } from "../../common/Pagination";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C } from "../../../utils/adminTheme";
@@ -470,6 +471,13 @@ export default function AdminRecords() {
     });
   }, [doctorFilter, patientFilter, records, search]);
 
+  // Paginate the filtered rows; changing any filter returns to page 1.
+  const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(
+    visibleRecords,
+    10,
+    `${search}|${doctorFilter}|${patientFilter}`
+  );
+
   const saveRecord = async (payload) => {
     setSaving(true);
     try {
@@ -563,7 +571,7 @@ export default function AdminRecords() {
             <Button onClick={() => { setSearch(""); setPatientFilter("all"); setDoctorFilter("all"); }}>Clear</Button>
           </div>
           <div style={{ color: C.text, fontSize: 12, fontWeight: 800 }}>
-            Showing {visibleRecords.length} of {records.length} loaded medical record{records.length === 1 ? "" : "s"}
+            {visibleRecords.length} of {records.length} loaded medical record{records.length === 1 ? "" : "s"} match your filters
           </div>
         </div>
 
@@ -592,7 +600,7 @@ export default function AdminRecords() {
                   </td>
                 </tr>
               ) : (
-                visibleRecords.map((record) => {
+                pageItems.map((record) => {
                   const followUp = record.follow_up_date_text || record.follow_up_date;
                   return (
                     <tr key={recordId(record)} style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -631,6 +639,17 @@ export default function AdminRecords() {
             </tbody>
           </table>
         </div>
+
+        {!loading && (
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            totalItems={totalItems}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            label="records"
+          />
+        )}
       </section>
 
       {modal?.mode === "view" && (

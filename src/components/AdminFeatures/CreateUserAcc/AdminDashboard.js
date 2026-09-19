@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import MainLayout from "../../Layout/MainLayout";
+import Pagination, { usePagination } from "../../common/Pagination";
 import { authFetch } from "../../../utils/auth";
 import { C } from "../../../utils/adminTheme";
 
@@ -183,6 +184,13 @@ export default function AdminDashboard() {
   const filteredAppts = statusFilter === "ALL"
     ? todayAppts
     : todayAppts.filter(a => a.status === statusFilter);
+
+  // Paginate the today's-appointments panel; switching the status tab resets to page 1.
+  const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(
+    filteredAppts,
+    10,
+    statusFilter
+  );
 
   const today = new Date().toLocaleDateString("en-PH", {
     weekday: "long", year: "numeric", month: "long", day: "numeric",
@@ -388,7 +396,7 @@ export default function AdminDashboard() {
                 {statusFilter === "ALL" ? "No appointments scheduled today." : `No ${(STATUS_CFG[statusFilter]?.label || statusFilter).toLowerCase()} appointments.`}
               </div>
             ) : (
-              filteredAppts.map(a => (
+              pageItems.map(a => (
                 <div
                   key={a.id}
                   style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr .85fr .7fr .8fr", gap: 8, padding: "9px 18px", borderBottom: `1px solid #f8fafd`, alignItems: "center" }}
@@ -408,8 +416,19 @@ export default function AdminDashboard() {
           {/* Footer count */}
           {!loadingDash && (
             <div style={{ padding: "8px 18px", borderTop: `1px solid #f0f4f9`, fontSize: 11.5, color: C.muted }}>
-              Showing {filteredAppts.length} of {todayAppts.length} appointment{todayAppts.length !== 1 ? "s" : ""}
+              {filteredAppts.length} of {todayAppts.length} appointment{todayAppts.length !== 1 ? "s" : ""} today
             </div>
+          )}
+
+          {!loadingDash && (
+            <Pagination
+              page={page}
+              totalPages={totalPages}
+              totalItems={totalItems}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              label="appointments"
+            />
           )}
         </Card>
 

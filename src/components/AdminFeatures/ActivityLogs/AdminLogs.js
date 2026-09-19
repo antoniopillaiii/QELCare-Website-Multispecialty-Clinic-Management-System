@@ -1,6 +1,7 @@
 // FILE: src/components/AdminFeatures/ActivityLogs/AdminLogs.js
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import MainLayout from "../../Layout/MainLayout";
+import Pagination from "../../common/Pagination";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C as COLORS } from "../../../utils/adminTheme";
@@ -474,20 +475,15 @@ export default function AdminLogs() {
             )}
           </div>
 
-          {!loading && logs.length > 0 && (
-            <div className="al-pagination">
-              <span>
-                Page {currentPage} of {totalPages}
-              </span>
-              <div>
-                <button type="button" disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>
-                  Previous
-                </button>
-                <button type="button" disabled={currentPage >= totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>
-                  Next
-                </button>
-              </div>
-            </div>
+          {!loading && (
+            <Pagination
+              page={currentPage}
+              totalPages={totalPages}
+              totalItems={safeNumber(pagination.total)}
+              pageSize={safeNumber(pagination.limit) || 25}
+              onPageChange={setPage}
+              label="logs"
+            />
           )}
         </section>
 

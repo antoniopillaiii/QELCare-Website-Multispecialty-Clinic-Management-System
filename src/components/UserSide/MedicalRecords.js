@@ -14,6 +14,7 @@ import {
   inputStyle,
   todayISO,
 } from "../Workflow/ClinicUi";
+import Pagination, { usePagination } from "../common/Pagination";
 
 const blankRecord = {
   patient_id: "",
@@ -57,6 +58,8 @@ export default function MedicalRecords({ appointment, latestVital, onCreated }) 
   const isConsultationEntry = canCreate && Boolean(appointment);
 
   const [records, setRecords] = useState([]);
+  // Paginate the consultation records list (same behaviour as the mobile app).
+  const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(records, 10, "records");
   const [appointments, setAppointments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -331,7 +334,7 @@ export default function MedicalRecords({ appointment, latestVital, onCreated }) 
           <EmptyState title="No records found" detail={isPatient ? "Completed doctor records will show here." : "Patient history will appear here after records are created."} />
         ) : (
           <div style={{ display: "grid" }}>
-            {records.map((record) => (
+            {pageItems.map((record) => (
               <article key={record.record_id || record.id} style={{ padding: 16, borderTop: "1px solid #eef3f9", display: "grid", gap: 8 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                   <div>
@@ -359,6 +362,15 @@ export default function MedicalRecords({ appointment, latestVital, onCreated }) 
             ))}
           </div>
         )}
+
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          totalItems={totalItems}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          label="records"
+        />
       </Panel>
     </div>
   );

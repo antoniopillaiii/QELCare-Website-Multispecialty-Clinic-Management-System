@@ -12,6 +12,7 @@ import {
   formatDate,
   inputStyle,
 } from "../Workflow/ClinicUi";
+import Pagination, { usePagination } from "../common/Pagination";
 import ConfirmModal from "../common/ConfirmModal";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
@@ -186,6 +187,9 @@ function DocumentsTab() {
       .some((value) => String(value || "").toLowerCase().includes(q)));
   }, [results, search]);
 
+  // Paginate the document cards; typing a new search returns to page 1.
+  const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(filtered, 10, search);
+
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
@@ -334,7 +338,7 @@ function DocumentsTab() {
             <EmptyState title="No documents yet" detail="Upload a medical paper or enter details manually." />
           ) : (
             <div style={{ display: "grid", gap: 10 }}>
-              {filtered.map((item) => (
+              {pageItems.map((item) => (
                 <button
                   key={item.result_id}
                   type="button"
@@ -358,6 +362,15 @@ function DocumentsTab() {
               ))}
             </div>
           )}
+
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            totalItems={totalItems}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            label="documents"
+          />
         </Panel>
 
         <Panel style={{ padding: 16 }}>
@@ -458,6 +471,10 @@ function MedicationsTab() {
   const [parsed, setParsed] = useState([]);
   const [confirm, setConfirm] = useState(null);
   const fileInputRef = useRef(null);
+
+  // Paginate the medication cards. Constant reset key so refreshing the list
+  // after an edit keeps the patient on the page they were reading.
+  const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(meds, 10, "medications");
 
   const loadMeds = useCallback(async () => {
     setLoading(true); setError(null);
@@ -783,7 +800,7 @@ function MedicationsTab() {
               <EmptyState title="No medications tracked" detail="Scan a prescription or add a medicine manually." />
             ) : (
               <div style={{ display: "grid", gap: 10 }}>
-                {meds.map((med) => (
+                {pageItems.map((med) => (
                   <div key={med.medication_id} style={{ border: "1px solid #e3ebf5", borderRadius: 8, padding: 12, opacity: med.status === "active" ? 1 : 0.65 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                       <div style={{ minWidth: 0 }}>
@@ -827,6 +844,15 @@ function MedicationsTab() {
                 ))}
               </div>
             )}
+
+            <Pagination
+              page={page}
+              totalPages={totalPages}
+              totalItems={totalItems}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              label="medications"
+            />
           </Panel>
         </div>
       </div>

@@ -14,6 +14,7 @@ import {
   inputStyle,
   todayISO,
 } from "../Workflow/ClinicUi";
+import Pagination, { usePagination } from "../common/Pagination";
 import Modal from "../common/Modal";
 import ReasonModal from "../common/ReasonModal";
 
@@ -197,6 +198,13 @@ export default function AppointmentList() {
       .sort(compareAppointments);
   }, [appointments, date, search, status, view]);
 
+  // Paginate the filtered rows; changing a filter or tab returns to page 1.
+  const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(
+    filtered,
+    10,
+    `${search}|${status}|${date}|${view}`
+  );
+
   async function changeStatus(appointment, nextStatus, cancelReason = "") {
     if (isHistory(appointment)) {
       setError("History appointments cannot be changed.");
@@ -350,7 +358,7 @@ export default function AppointmentList() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((item) => {
+                {pageItems.map((item) => {
                   const rowHistory = isHistory(item);
                   return (
                     <tr key={item.id} style={{ borderTop: "1px solid #eef3f9" }}>
@@ -385,6 +393,17 @@ export default function AppointmentList() {
               </tbody>
             </table>
           </div>
+        )}
+
+        {!loading && (
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            totalItems={totalItems}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            label="appointments"
+          />
         )}
       </Panel>
     </div>
