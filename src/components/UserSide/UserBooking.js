@@ -242,7 +242,7 @@ export default function UserBooking({ onViewAppointments, onBooked }) {
 
   function updateRelative(name, value) {
     // Auto-capitalize and block invalid characters in the relative's name fields,
-    // matching registration and Create User.
+    // matching registration and Add User.
     let v = value;
     if (name === "first_name" || name === "last_name") {
       v = value

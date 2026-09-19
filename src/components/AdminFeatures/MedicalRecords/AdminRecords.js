@@ -375,7 +375,7 @@ function RecordFormModal({ record, patients, doctors, appointments, saving, onCl
 
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
             <Button onClick={onClose} disabled={saving}>Cancel</Button>
-            <Button type="submit" variant="primary" disabled={saving}>{saving ? "Saving..." : isEdit ? "Save Changes" : "Create Record"}</Button>
+            <Button type="submit" variant="primary" disabled={saving}>{saving ? "Saving..." : isEdit ? "Save Changes" : "Add Record"}</Button>
           </div>
         </form>
       </div>

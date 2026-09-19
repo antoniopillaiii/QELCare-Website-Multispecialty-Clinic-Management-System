@@ -219,7 +219,7 @@ function AppointmentModal({ mode, appointment, patients, doctors, specialties, s
       <div style={{ width: "min(820px,100%)", maxHeight: "90vh", overflow: "hidden", background: "#fff", borderRadius: 16, boxShadow: "0 24px 70px rgba(15,23,42,.28)" }}>
         <div style={{ padding: "18px 22px", background: C.blue, color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 900 }}>{isEdit ? "Reschedule Appointment" : "Create Appointment"}</div>
+            <div style={{ fontSize: 18, fontWeight: 900 }}>{isEdit ? "Reschedule Appointment" : "Add Appointment"}</div>
             <div style={{ fontSize: 12, opacity: 0.78, marginTop: 3 }}>{isEdit ? `Appointment #${appointment.id}` : "Book an existing patient with a clinic doctor"}</div>
           </div>
           <button onClick={onClose} aria-label="Close" style={{ width: 34, height: 34, border: "none", borderRadius: 8, background: "rgba(255,255,255,.12)", color: "#fff", cursor: "pointer", display: "grid", placeItems: "center" }}><X size={18} /></button>
@@ -275,7 +275,7 @@ function AppointmentModal({ mode, appointment, patients, doctors, specialties, s
 
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
             <Button onClick={onClose} disabled={saving}>Cancel</Button>
-            <Button type="submit" variant="primary" disabled={saving}>{saving ? "Saving..." : isEdit ? "Save Reschedule" : "Create Appointment"}</Button>
+            <Button type="submit" variant="primary" disabled={saving}>{saving ? "Saving..." : isEdit ? "Save Changes" : "Add Appointment"}</Button>
           </div>
         </form>
       </div>
@@ -532,7 +532,7 @@ export default function AdminAppointments() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 22, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 11, fontWeight: 900, color: C.muted, letterSpacing: ".08em", textTransform: "uppercase" }}>Admin</div>
-          <h1 style={{ margin: "4px 0 4px", color: C.navy, fontSize: 24, lineHeight: 1.2 }}>Appointment Management</h1>
+          <h1 style={{ margin: "4px 0 4px", color: C.navy, fontSize: 24, lineHeight: 1.2 }}>Appointments</h1>
           <div style={{ color: C.text, fontSize: 13 }}>Book, approve, reschedule, cancel, and mark no-shows. Same-day approvals enter the live queue.</div>
         </div>
         <div style={{ display: "flex", gap: 10 }}>

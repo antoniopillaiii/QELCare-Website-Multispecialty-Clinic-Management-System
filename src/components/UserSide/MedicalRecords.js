@@ -311,7 +311,7 @@ export default function MedicalRecords({ appointment, latestVital, onCreated }) 
               </div>
 
               <div style={{ display: "flex", gap: 8 }}>
-                <ActionButton type="submit" disabled={saving}>{saving ? "Saving..." : isConsultationEntry ? "Save Record and Complete Visit" : "Create Record"}</ActionButton>
+                <ActionButton type="submit" disabled={saving}>{saving ? "Saving..." : isConsultationEntry ? "Save Record and Complete Visit" : "Add Record"}</ActionButton>
                 {!isConsultationEntry && <ActionButton tone="secondary" onClick={() => setShowForm(false)}>Cancel</ActionButton>}
               </div>
             </form>

@@ -24,11 +24,11 @@ const Icons = {
 const NAV_BY_ROLE = {
   Admin: [
     { id: "dashboard", label: "Dashboard", icon: Icons.dashboard, path: "/admin/dashboard" },
-    { id: "users", label: "Manage Users", icon: Icons.users, path: "/admin/users" },
-    { id: "patients", label: "Patient Management", icon: Icons.patients, path: "/admin/patients" },
+    { id: "users", label: "Users", icon: Icons.users, path: "/admin/users" },
+    { id: "patients", label: "Patients", icon: Icons.patients, path: "/admin/patients" },
     { id: "appointments", label: "Appointments", icon: Icons.appointments, path: "/admin/appointments" },
     { id: "inquiries", label: "Inquiries", icon: Icons.inquiries, path: "/admin/inquiries" },
-    { id: "queue", label: "Queue Management", icon: Icons.queue, path: "/admin/queue" },
+    { id: "queue", label: "Queue", icon: Icons.queue, path: "/admin/queue" },
     { id: "records", label: "Medical Records", icon: Icons.records, path: "/admin/records" },
     { id: "billing", label: "Billing", icon: Icons.billing, path: "/admin/billing" },
     { id: "reports", label: "Reports & Analytics", icon: Icons.reports, path: "/admin/reports" },
@@ -51,7 +51,7 @@ const NAV_BY_ROLE = {
     { id: "profile", label: "Profile Settings", icon: Icons.profile, path: "/frontdesk/profile" },
   ],
   Nurse: [
-    { id: "station", label: "Nurse Dashboard", icon: Icons.nurseQueue, path: "/nurse-station" },
+    { id: "station", label: "Dashboard", icon: Icons.nurseQueue, path: "/nurse-station" },
     { id: "appointments", label: "Appointments", icon: Icons.appointments, path: "/nurse/appointments" },
     { id: "profile", label: "Profile Settings", icon: Icons.profile, path: "/nurse/profile" },
   ],
@@ -64,7 +64,7 @@ const NAV_BY_ROLE = {
     { id: "dashboard", label: "Dashboard", icon: Icons.dashboard, path: "/dashboard" },
     { id: "appointments", label: "Appointments", icon: Icons.appointments, path: "/patient/appointments" },
     { id: "myRecords", label: "Consultation Records", icon: Icons.myRecords, path: "/patient/records" },
-    { id: "health", label: "Medications & Documents", icon: Icons.medicalResults, path: "/patient/health" },
+    { id: "health", label: "Health Records", icon: Icons.medicalResults, path: "/patient/health" },
     { id: "profile", label: "Profile Settings", icon: Icons.profile, path: "/patient/profile" },
   ],
 };

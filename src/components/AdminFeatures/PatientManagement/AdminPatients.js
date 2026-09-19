@@ -350,7 +350,7 @@ function PatientModal({ mode, patient, saving, onClose, onSave }) {
 
             <div style={{ flexShrink: 0, display: "flex", justifyContent: "flex-end", gap: 10, padding: "14px 24px", background: "#fff", borderTop: `1px solid ${C.border}` }}>
               <Button onClick={onClose} disabled={saving}>Cancel</Button>
-              <Button type="submit" variant="primary" disabled={saving}>{saving ? "Saving..." : isEdit ? "Save Changes" : "Create Patient"}</Button>
+              <Button type="submit" variant="primary" disabled={saving}>{saving ? "Saving..." : isEdit ? "Save Changes" : "Add Patient"}</Button>
             </div>
           </form>
         )}
@@ -529,7 +529,7 @@ export default function AdminPatients() {
   };
 
   return (
-    <MainLayout pageTitle="Patient Management" pageSubtitle="Clinical patient records and profile completeness">
+    <MainLayout pageTitle="Patients" pageSubtitle="Clinical patient records and profile completeness">
       {alert && (
         <div style={{
           position: "fixed",
@@ -552,7 +552,7 @@ export default function AdminPatients() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 22, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 11, fontWeight: 900, color: C.muted, letterSpacing: ".08em", textTransform: "uppercase" }}>Admin</div>
-          <h1 style={{ margin: "4px 0 4px", color: C.navy, fontSize: 24, lineHeight: 1.2 }}>Patient Management</h1>
+          <h1 style={{ margin: "4px 0 4px", color: C.navy, fontSize: 24, lineHeight: 1.2 }}>Patients</h1>
           <div style={{ color: C.text, fontSize: 13 }}>Manage clinical patient records separately from login accounts.</div>
         </div>
         <div style={{ display: "flex", gap: 10 }}>

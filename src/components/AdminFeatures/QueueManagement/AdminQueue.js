@@ -402,7 +402,7 @@ export default function AdminQueue() {
 
   return (
     <MainLayout
-      pageTitle="Queue Management"
+      pageTitle="Queue"
       pageSubtitle="Live clinic queue by specialty"
     >
       <style>
@@ -759,7 +759,7 @@ export default function AdminQueue() {
         ) : !activeSpecialtyId ? (
           <EmptyState
             title="No active specialties"
-            body="Add or activate specialties before using Queue Management."
+            body="Add or activate specialties before using the queue."
           />
         ) : queue.length === 0 ? (
           <EmptyState

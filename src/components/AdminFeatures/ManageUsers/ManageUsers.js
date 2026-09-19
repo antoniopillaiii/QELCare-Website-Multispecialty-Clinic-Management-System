@@ -241,7 +241,7 @@ function UserCard({ user, currentUserId, onView, onEdit, onRemove }) {
         <Button onClick={() => onView(user)}>View</Button>
         <Button onClick={() => onEdit(user)} disabled={isCurrentUser}>Edit</Button>
         <Button variant="danger" onClick={() => onRemove(user)} disabled={isCurrentUser || user.status === "deactivated"}>
-          Remove
+          Deactivate
         </Button>
       </div>
     </article>
@@ -511,7 +511,7 @@ function UserModal({ user, roles, specialties, mode, onClose, onSave, saving }) 
 
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, position: "sticky", bottom: 0, margin: "0 -24px 0", padding: "16px 24px", background: "#fafbfd", borderTop: `1px solid ${C.border}` }}>
                 <Button onClick={onClose} disabled={saving}>Cancel</Button>
-                <Button variant="primary" type="submit" disabled={saving}>{saving ? "Saving..." : isEdit ? "Update User" : "Create User"}</Button>
+                <Button variant="primary" type="submit" disabled={saving}>{saving ? "Saving..." : isEdit ? "Save Changes" : "Add User"}</Button>
               </div>
             </form>
           )}
@@ -567,7 +567,7 @@ function ListTable({ users, currentUserId, onView, onEdit, onRemove }) {
                   <div style={{ display: "inline-flex", gap: 8 }}>
                     <Button onClick={() => onView(user)}>View</Button>
                     <Button onClick={() => onEdit(user)} disabled={isCurrentUser}>Edit</Button>
-                    <Button variant="danger" onClick={() => onRemove(user)} disabled={isCurrentUser || user.status === "deactivated"}>Remove</Button>
+                    <Button variant="danger" onClick={() => onRemove(user)} disabled={isCurrentUser || user.status === "deactivated"}>Deactivate</Button>
                   </div>
                 </td>
               </tr>
@@ -787,7 +787,7 @@ export default function ManageUsers() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 22, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 11, fontWeight: 900, color: C.muted, letterSpacing: ".08em", textTransform: "uppercase" }}>Admin</div>
-          <h1 style={{ margin: "4px 0 4px", color: C.navy, fontSize: 24, lineHeight: 1.2 }}>Manage Users</h1>
+          <h1 style={{ margin: "4px 0 4px", color: C.navy, fontSize: 24, lineHeight: 1.2 }}>Users</h1>
           <div style={{ color: C.text, fontSize: 13 }}>Backend-synced account directory, roles, statuses, and profile photos.</div>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
