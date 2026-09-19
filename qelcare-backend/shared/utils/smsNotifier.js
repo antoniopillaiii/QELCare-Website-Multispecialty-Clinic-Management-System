@@ -170,12 +170,16 @@ async function sendViaSemaphore(to, message) {
   // Semaphore expects the local 11-digit form (09XXXXXXXXX) or +63; it accepts
   // 639XXXXXXXXX. We pass the E.164 digits without the leading '+'.
   const number = to.replace(/^\+/, "");
-  const res = await httpsPostForm("https://api.semaphore.co/api/v4/messages", {
+  const form = {
     apikey: process.env.SEMAPHORE_API_KEY,
     number,
     message,
-    sendername: senderName(),
-  });
+  };
+  // Only send a custom sender name when EXPLICITLY set — an unregistered name is
+  // rejected by Semaphore, so an unset SMS_SENDER uses the account's default
+  // sender (works out of the box on free/trial accounts).
+  if (process.env.SMS_SENDER) form.sendername = process.env.SMS_SENDER;
+  const res = await httpsPostForm("https://api.semaphore.co/api/v4/messages", form);
   if (res.statusCode >= 200 && res.statusCode < 300) return { ok: true };
   return {
     ok: false,
