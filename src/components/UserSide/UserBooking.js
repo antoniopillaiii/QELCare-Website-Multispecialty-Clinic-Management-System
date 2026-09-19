@@ -18,21 +18,165 @@ const APPOINTMENT_TYPES = [
   { value: "emergency", label: "Emergency" },
 ];
 
-// Common chief complaints offered as a dropdown; "Other" reveals a free-text box.
-const COMPLAINTS = [
+// ---------------------------------------------------------------------------
+// Chief complaints are DEPARTMENT-SPECIFIC. A patient booking with ENT must not
+// be offered "High blood pressure check", so each of the 8 departments has its
+// own list instead of one shared menu.
+//
+// Keys are the specialty_name from the API, normalised (lowercased, every
+// non-alphanumeric stripped) so "Ob-Gyne", "OB GYNE" and "Obstetrics &
+// Gynecology" all resolve to the same list. Every list ends with
+// "Follow-up check-up" then "Other" ("Other" reveals a free-text box).
+// ---------------------------------------------------------------------------
+const GENERAL_COMPLAINTS = [
   "Fever",
   "Cough or colds",
   "Sore throat",
   "Headache",
-  "Stomach ache",
   "Body pain / muscle pain",
   "Skin problem or rashes",
   "High blood pressure check",
   "Diabetes / blood sugar check",
-  "Follow-up check-up",
+  "General check-up",
+  "Medical certificate / clearance",
   "Vaccination / immunization",
+  "Follow-up check-up",
   "Other",
 ];
+
+const COMPLAINTS_BY_DEPARTMENT = {
+  ent: [
+    "Sore throat",
+    "Ear pain or ear discharge",
+    "Hearing problem or ringing in the ear",
+    "Colds or blocked nose",
+    "Sinus pain or congestion",
+    "Tonsil problem",
+    "Hoarseness or voice change",
+    "Nosebleed",
+    "Snoring or sleep problem",
+    "Dizziness or vertigo",
+    "Follow-up check-up",
+    "Other",
+  ],
+  cardiology: [
+    "High blood pressure check",
+    "Chest pain or tightness",
+    "Palpitations or irregular heartbeat",
+    "Shortness of breath",
+    "Swelling of legs or feet",
+    "Dizziness or fainting",
+    "Cholesterol check",
+    "Heart check-up or clearance",
+    "Follow-up check-up",
+    "Other",
+  ],
+  gastroenterology: [
+    "Stomach ache or abdominal pain",
+    "Acid reflux or heartburn",
+    "Nausea or vomiting",
+    "Diarrhea",
+    "Constipation",
+    "Bloating or gas",
+    "Blood in stool",
+    "Difficulty swallowing",
+    "Yellowing of eyes or skin",
+    "Follow-up check-up",
+    "Other",
+  ],
+  generalmedicine: GENERAL_COMPLAINTS,
+  rehabilitationmedicine: [
+    "Back pain",
+    "Neck or shoulder pain",
+    "Knee or joint pain",
+    "Muscle weakness",
+    "Difficulty walking or moving",
+    "Recovery after injury or surgery",
+    "Recovery after stroke",
+    "Sports injury",
+    "Physical therapy session",
+    "Follow-up check-up",
+    "Other",
+  ],
+  obgyne: [
+    "Prenatal check-up",
+    "Postnatal check-up",
+    "Irregular menstruation",
+    "Menstrual pain",
+    "Vaginal discharge or itching",
+    "Pelvic or lower abdominal pain",
+    "Family planning or contraception",
+    "Pap smear or cervical screening",
+    "Breast lump or breast pain",
+    "Pregnancy test or confirmation",
+    "Follow-up check-up",
+    "Other",
+  ],
+  pediatrics: [
+    "Fever",
+    "Cough or colds",
+    "Sore throat",
+    "Diarrhea or vomiting",
+    "Skin rashes",
+    "Ear pain",
+    "Growth or weight concern",
+    "Well-baby check-up",
+    "Vaccination or immunization",
+    "Follow-up check-up",
+    "Other",
+  ],
+  psychiatry: [
+    "Anxiety or excessive worry",
+    "Sadness or depression",
+    "Sleep problems or insomnia",
+    "Stress or burnout",
+    "Mood swings",
+    "Difficulty focusing",
+    "Panic attacks",
+    "Grief or loss",
+    "Medication review",
+    "Follow-up check-up",
+    "Other",
+  ],
+};
+
+// Naming differences between the database and the UI still resolve correctly.
+const DEPARTMENT_ALIASES = {
+  earnosethroat: "ent",
+  otorhinolaryngology: "ent",
+  gastro: "gastroenterology",
+  internalmedicine: "generalmedicine",
+  familymedicine: "generalmedicine",
+  generalpractice: "generalmedicine",
+  rehabilitation: "rehabilitationmedicine",
+  physicalmedicineandrehabilitation: "rehabilitationmedicine",
+  physicaltherapy: "rehabilitationmedicine",
+  obgyn: "obgyne",
+  obstetricsgynecology: "obgyne",
+  obstetricsandgynecology: "obgyne",
+  obstetrics: "obgyne",
+  gynecology: "obgyne",
+  pedia: "pediatrics",
+  pediatric: "pediatrics",
+  mentalhealth: "psychiatry",
+};
+
+function normalizeDepartment(name) {
+  return String(name || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+// Returns [] when no department is chosen yet (the picker stays disabled), and
+// falls back to the general list for any unmapped/new specialty so a patient is
+// never left with an empty menu.
+function complaintsForDepartment(specialtyName) {
+  const key = normalizeDepartment(specialtyName);
+  if (!key) return [];
+  return (
+    COMPLAINTS_BY_DEPARTMENT[key] ||
+    COMPLAINTS_BY_DEPARTMENT[DEPARTMENT_ALIASES[key]] ||
+    GENERAL_COMPLAINTS
+  );
+}
 
 const GENDERS = ["", "Male", "Female", "Other"];
 
@@ -227,14 +371,32 @@ export default function UserBooking({ onViewAppointments, onBooked }) {
     return doctors.filter((d) => String(d.specialty_id) === String(form.specialty_id));
   }, [doctors, form.specialty_id]);
 
+  // Chief-complaint options follow the chosen department.
+  const selectedDepartmentName = useMemo(() => {
+    const match = departments.find((d) => String(d.specialty_id) === String(form.specialty_id));
+    return match?.specialty_name || "";
+  }, [departments, form.specialty_id]);
+
+  const complaintOptions = useMemo(
+    () => complaintsForDepartment(selectedDepartmentName),
+    [selectedDepartmentName]
+  );
+
   function updateField(name, value) {
     if (name === "doctor_id") {
       const doctor = doctors.find((item) => String(item.user_id) === String(value));
+      const nextSpecialty = doctor?.specialty_id || "";
+      // Picking a doctor can also change the department, which would invalidate
+      // an already-chosen complaint — clear it so no ENT booking keeps a
+      // cardiology concern.
+      const departmentChanged = String(nextSpecialty) !== String(form.specialty_id);
       setForm((current) => ({
         ...current,
         doctor_id: value,
-        specialty_id: doctor?.specialty_id || "",
+        specialty_id: nextSpecialty,
+        chief_complaint: departmentChanged ? "" : current.chief_complaint,
       }));
+      if (departmentChanged) setComplaintChoice("");
       return;
     }
     setForm((current) => ({ ...current, [name]: value }));
@@ -260,9 +422,11 @@ export default function UserBooking({ onViewAppointments, onBooked }) {
   }
 
   // Picking a department resets the doctor choice so only that department's
-  // doctors can be selected next.
+  // doctors can be selected next, and clears the chief complaint because the
+  // available complaints are department-specific.
   function selectDepartment(value) {
-    setForm((current) => ({ ...current, specialty_id: value, doctor_id: "" }));
+    setForm((current) => ({ ...current, specialty_id: value, doctor_id: "", chief_complaint: "" }));
+    setComplaintChoice("");
   }
 
   function selectComplaint(value) {
@@ -330,6 +494,9 @@ export default function UserBooking({ onViewAppointments, onBooked }) {
 
       setMessage("Appointment booked. It will stay pending until Frontdesk confirms it.");
       setSelectedRelativeId("");
+      // Clear the picker too, otherwise it keeps showing the previous concern
+      // while form.chief_complaint below is reset to empty.
+      setComplaintChoice("");
       setForm((current) => ({
         ...current,
         chief_complaint: "",
@@ -475,10 +642,22 @@ export default function UserBooking({ onViewAppointments, onBooked }) {
           </div>
 
           <Field label="Chief complaint">
-            <select style={inputStyle} value={complaintChoice} onChange={(e) => selectComplaint(e.target.value)}>
-              <option value="">Select your main concern</option>
-              {COMPLAINTS.map((c) => <option key={c} value={c}>{c}</option>)}
+            <select
+              style={inputStyle}
+              value={complaintChoice}
+              onChange={(e) => selectComplaint(e.target.value)}
+              disabled={!form.specialty_id}
+            >
+              <option value="">
+                {form.specialty_id ? "Select your main concern" : "Select a department first"}
+              </option>
+              {complaintOptions.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
+            {form.specialty_id && (
+              <div style={{ fontSize: 11, color: "#8a97a8", marginTop: 4 }}>
+                Showing concerns commonly handled by {selectedDepartmentName}.
+              </div>
+            )}
           </Field>
           {complaintChoice === "Other" && (
             <Field label="Please specify your concern">
