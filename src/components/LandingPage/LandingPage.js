@@ -344,11 +344,11 @@ const styles = `
   }
 
   .eyebrow .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #fff;
-    opacity: 0.9;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #5eead4;
+  box-shadow: 0 0 0 4px rgba(94,234,212,.18);
   }
 
   .hero-title {
