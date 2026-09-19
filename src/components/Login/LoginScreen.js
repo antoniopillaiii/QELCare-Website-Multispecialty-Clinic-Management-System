@@ -487,7 +487,7 @@ export default function LoginScreen() {
             <div className="ls-brand-body">
               <div className="ls-eyebrow">
                 <span className="ls-eyebrow-dot" />
-                Multispecialty Clinic Management
+                Multi-specialty Clinic Management
               </div>
               <h1>Secure sign in for<br /><em>patients and clinic staff.</em></h1>
               <p className="ls-brand-desc">Access appointments, records, billing, and clinic services through one streamlined portal.</p>
