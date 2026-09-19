@@ -3,11 +3,16 @@ import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import MainLayout from "../../Layout/MainLayout";
 import Pagination from "../../common/Pagination";
+import { C } from "../../../utils/adminTheme";
 import { X } from "lucide-react";
 
-const NAVY = "#0f2744";
-const MUTED = "#5a6a7e";
-const BORDER = "#e4ecf5";
+// These were hard-coded copies of the shared palette (identical values), which
+// is exactly the drift adminTheme.js exists to prevent — if the theme changes,
+// this module would silently stay behind. Aliases keep the rest of the file
+// reading unchanged. No visual change.
+const NAVY = C.navy;
+const MUTED = C.text;
+const BORDER = C.border;
 const BG = "#eef4fb";
 
 const STATUS_META = {

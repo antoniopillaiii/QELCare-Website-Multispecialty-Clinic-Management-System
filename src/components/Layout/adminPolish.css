@@ -73,3 +73,28 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
+
+/* Respect the OS "reduce motion" setting.
+   This file adds transitions, hover filters and press transforms to every
+   control in the app, and the sign-in/landing screens already honour this
+   preference — without the rule below, every other module (admin, patient,
+   frontdesk, nurse, doctor, cashier) would keep animating for users who have
+   asked their system not to. Focus rings and colors are left untouched so
+   nothing becomes less visible. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  button:not(:disabled):hover {
+    filter: none;
+  }
+  button:not(:disabled):active {
+    transform: none;
+  }
+}
