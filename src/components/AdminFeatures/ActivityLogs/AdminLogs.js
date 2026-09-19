@@ -683,7 +683,6 @@ export default function AdminLogs() {
 
         .al-primary,
         .al-secondary,
-        .al-pagination button,
         .al-actions button {
           height: 38px;
           border-radius: 10px;
@@ -702,7 +701,6 @@ export default function AdminLogs() {
         }
 
         .al-secondary,
-        .al-pagination button,
         .al-actions button {
           background: #fff;
           border-color: #dce6f1;
@@ -879,27 +877,6 @@ export default function AdminLogs() {
           border-radius: 8px;
         }
 
-        .al-pagination {
-          padding: 14px 22px;
-          border-top: 1px solid #eef3f9;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 14px;
-          color: #66778a;
-          font-size: 13px;
-        }
-
-        .al-pagination div {
-          display: flex;
-          gap: 8px;
-        }
-
-        .al-pagination button:disabled {
-          opacity: 0.45;
-          cursor: not-allowed;
-        }
-
         .al-modal-backdrop {
           position: fixed;
           inset: 0;
@@ -1025,20 +1002,17 @@ export default function AdminLogs() {
             grid-column: auto;
           }
 
-          .al-panel-head,
-          .al-pagination {
+          .al-panel-head {
             align-items: stretch;
             flex-direction: column;
           }
 
-          .al-filter-actions,
-          .al-pagination div {
+          .al-filter-actions {
             width: 100%;
           }
 
           .al-primary,
-          .al-secondary,
-          .al-pagination button {
+          .al-secondary {
             flex: 1;
           }
         }
