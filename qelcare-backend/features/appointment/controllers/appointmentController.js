@@ -182,6 +182,12 @@ async function notifyPatient({ userId, appointment, title, message, type = "appo
   }
 }
 
+// Which statuses are worth an SMS. In-app + email + push fire on every event
+// (all free); SMS costs money per message, so it is limited to the key patient
+// events only: confirm / cancel / reschedule. A same-day confirm lands as
+// IN_QUEUE (not CONFIRMED), so both count as "confirmed".
+const SMS_STATUSES = new Set(["CONFIRMED", "IN_QUEUE", "CANCELLED", "RESCHEDULED"]);
+
 async function emailPatient({ appointment, status }) {
   try {
     await emailNotifier.sendAppointmentNotification({
@@ -199,9 +205,10 @@ async function emailPatient({ appointment, status }) {
 
   // SMS the actual patient (p.phone), NOT the booker — so a staff member who
   // books on a patient's behalf is never texted. Best-effort and independent
-  // of the email above; the SMS layer no-ops safely when unconfigured.
+  // of the email above; the SMS layer no-ops safely when unconfigured. Limited
+  // to key events (SMS_STATUSES) to save gateway credits.
   try {
-    if (appointment.patient_phone) {
+    if (appointment.patient_phone && SMS_STATUSES.has(String(status).toUpperCase())) {
       await smsNotifier.sendAppointmentSms({
         to: appointment.patient_phone,
         patientName: appointment.patient_name,

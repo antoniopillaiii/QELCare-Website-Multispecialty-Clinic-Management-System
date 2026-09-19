@@ -275,9 +275,10 @@ async function sendOtpSms({ to, otp, ttlMinutes }) {
 async function sendAppointmentSms({ to, patientName, doctorName, date, time, status = "PENDING" }) {
   const who = patientName ? `${patientName}, ` : "";
   const doc = doctorName ? ` with ${doctorName}` : "";
+  const label = String(status).toUpperCase().replace(/_/g, " "); // IN_QUEUE -> IN QUEUE
   return sendSms({
     to,
-    message: `QELCare: ${who}your appointment${doc} on ${date} at ${time} is now ${String(status).toUpperCase()}.`,
+    message: `QELCare: ${who}your appointment${doc} on ${date} at ${time} is now ${label}.`,
   });
 }
 
