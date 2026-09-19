@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import MainLayout from "../../Layout/MainLayout";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
@@ -347,6 +348,9 @@ function AppointmentRow({ appointment, onStatus, onReschedule }) {
 const thStyle = { textAlign: "left", padding: "12px 14px", color: C.muted, fontSize: 11, fontWeight: 900, textTransform: "uppercase", letterSpacing: ".05em", whiteSpace: "nowrap" };
 const tdStyle = { padding: "13px 14px", color: C.text, fontSize: 13, verticalAlign: "middle" };
 
+// Statuses accepted from the ?status= deep-link (e.g. from dashboard cards).
+const APPT_STATUS_VALUES = ["PENDING", "CONFIRMED", "IN_QUEUE", "COMPLETED", "CANCELLED", "RESCHEDULED", "NO_SHOW"];
+
 export default function AdminAppointments() {
   const [appointments, setAppointments] = useState([]);
   const [patients, setPatients] = useState([]);
@@ -356,8 +360,19 @@ export default function AdminAppointments() {
   const [saving, setSaving] = useState(false);
   const [alert, setAlert] = useState(null);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [dateFilter, setDateFilter] = useState("");
+  // Preset filters from the URL so dashboard cards can deep-link here, e.g.
+  // /admin/appointments?date=today  or  ?date=today&status=COMPLETED
+  const [searchParams] = useSearchParams();
+  const [statusFilter, setStatusFilter] = useState(() => {
+    const s = searchParams.get("status");
+    return s && APPT_STATUS_VALUES.includes(s) ? s : "all";
+  });
+  const [dateFilter, setDateFilter] = useState(() => {
+    const d = searchParams.get("date");
+    if (d === "today") return todayInput();
+    if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+    return "";
+  });
   const [doctorFilter, setDoctorFilter] = useState("all");
   const [modal, setModal] = useState(null);
   const [cancelTarget, setCancelTarget] = useState(null);

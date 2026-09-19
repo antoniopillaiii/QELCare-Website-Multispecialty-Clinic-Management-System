@@ -1,5 +1,6 @@
 // FILE: src/components/AdminFeatures/CreateUserAcc/AdminDashboard.js
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import MainLayout from "../../Layout/MainLayout";
 import { authFetch } from "../../../utils/auth";
 import { C } from "../../../utils/adminTheme";
@@ -112,6 +113,7 @@ function formatTime(t) {
 
 // --- Main Component -----------------------------------------------------------
 export default function AdminDashboard() {
+  const navigate = useNavigate();
   const [user, setUser]             = useState(null);
   const [users, setUsers]           = useState([]);
   const [loadingUsers, setLU]       = useState(true);
@@ -188,12 +190,14 @@ export default function AdminDashboard() {
   const firstName = user?.first_name || "Admin";
   const fullName  = user ? `${user.first_name} ${user.last_name}` : "Administrator";
 
+  // Each card deep-links to its module. "today" is resolved to the current
+  // Manila date by the Appointments page, which reads ?date / ?status.
   const METRICS = [
-    { label: "Total Users",        value: totalUsers,        icon: IC.users,    color: C.blue,   bg: C.blueL   },
-    { label: "Total Patients",     value: totalPatients,     icon: IC.patients, color: C.green,  bg: C.greenL  },
-    { label: "Appointments Today", value: appointmentsToday, icon: IC.appt,     color: C.amber,  bg: C.amberL  },
-    { label: "Active Queue",       value: activeQueue,       icon: IC.queue,    color: C.purple, bg: C.purpleL },
-    { label: "Completed Today",    value: completedToday,    icon: IC.done,     color: C.teal,   bg: C.tealL   },
+    { label: "Total Users",        value: totalUsers,        icon: IC.users,    color: C.blue,   bg: C.blueL,   to: "/admin/users" },
+    { label: "Total Patients",     value: totalPatients,     icon: IC.patients, color: C.green,  bg: C.greenL,  to: "/admin/patients" },
+    { label: "Appointments Today", value: appointmentsToday, icon: IC.appt,     color: C.amber,  bg: C.amberL,  to: "/admin/appointments?date=today" },
+    { label: "Active Queue",       value: activeQueue,       icon: IC.queue,    color: C.purple, bg: C.purpleL, to: "/admin/queue" },
+    { label: "Completed Today",    value: completedToday,    icon: IC.done,     color: C.teal,   bg: C.tealL,   to: "/admin/appointments?date=today&status=COMPLETED" },
   ];
 
   // -- Refresh handler ---------------------------------------------------------
@@ -246,10 +250,22 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* -- Metric Cards ------------------------------------------------------- */}
+      {/* -- Metric Cards (clickable — deep-link to each module) ---------------- */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 12, marginBottom: 20 }}>
         {METRICS.map(m => (
-          <div key={m.label} style={{ background: "#fff", borderRadius: 13, padding: "15px 16px", border: `1px solid ${C.border}`, boxShadow: "0 2px 8px rgba(15,23,42,.05)", display: "flex", alignItems: "center", gap: 11 }}>
+          <div
+            key={m.label}
+            role="button"
+            tabIndex={0}
+            aria-label={`${m.label}: ${m.value}. Open ${m.label}.`}
+            onClick={() => navigate(m.to)}
+            onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); navigate(m.to); } }}
+            onMouseEnter={e => { e.currentTarget.style.boxShadow = "0 8px 24px rgba(22,58,107,.14)"; e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.borderColor = m.color; }}
+            onMouseLeave={e => { e.currentTarget.style.boxShadow = "0 2px 8px rgba(15,23,42,.05)"; e.currentTarget.style.transform = "none"; e.currentTarget.style.borderColor = C.border; }}
+            onFocus={e => { e.currentTarget.style.boxShadow = `0 0 0 3px ${m.bg}`; e.currentTarget.style.borderColor = m.color; }}
+            onBlur={e => { e.currentTarget.style.boxShadow = "0 2px 8px rgba(15,23,42,.05)"; e.currentTarget.style.borderColor = C.border; }}
+            style={{ background: "#fff", borderRadius: 13, padding: "15px 16px", border: `1px solid ${C.border}`, boxShadow: "0 2px 8px rgba(15,23,42,.05)", display: "flex", alignItems: "center", gap: 11, cursor: "pointer", transition: "box-shadow .18s, transform .18s, border-color .18s", outline: "none" }}
+          >
             <div style={{ width: 40, height: 40, borderRadius: 10, background: m.bg, display: "grid", placeItems: "center", color: m.color, flexShrink: 0 }}>{m.icon}</div>
             <div>
               {(loadingDash || loadingUsers) && m.value === "-" ? (

@@ -172,6 +172,7 @@ export default function CashierDashboard() {
           sub="Paid today"
           accent="#1f7a52"
           icon={<IconCheck color="#1f7a52" />}
+          onClick={() => navigate("/cashier/billing")}
         />
         <StatCard
           label="Voided"
@@ -179,6 +180,7 @@ export default function CashierDashboard() {
           sub="All voided transactions"
           accent="#b94949"
           icon={<IconX color="#b94949" />}
+          onClick={() => navigate("/cashier/billing")}
         />
       </div>
 

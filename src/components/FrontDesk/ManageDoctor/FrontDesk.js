@@ -173,11 +173,11 @@ export default function FrontDesk() {
         )}
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12 }}>
-          <Metric label="Active Workload" value={stats.totalActive} />
-          <Metric label="Today" value={stats.today} />
-          <Metric label="Pending Approval" value={stats.pending} />
-          <Metric label="Today Queue" value={stats.todayQueue} />
-          <Metric label="Future Confirmed" value={stats.confirmedFuture} />
+          <Metric label="Active Workload" value={stats.totalActive} onClick={() => navigate("/frontdesk/appointments")} />
+          <Metric label="Today" value={stats.today} onClick={() => navigate("/frontdesk/appointments")} />
+          <Metric label="Pending Approval" value={stats.pending} onClick={() => navigate("/frontdesk/appointments")} />
+          <Metric label="Today Queue" value={stats.todayQueue} onClick={() => navigate("/frontdesk/appointments")} />
+          <Metric label="Future Confirmed" value={stats.confirmedFuture} onClick={() => navigate("/frontdesk/appointments")} />
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
@@ -221,11 +221,28 @@ export default function FrontDesk() {
   );
 }
 
-function Metric({ label, value }) {
-  return (
+function Metric({ label, value, onClick }) {
+  const inner = (
     <Panel style={{ padding: 16 }}>
       <div style={{ color: "#6b778c", fontSize: 12, fontWeight: 900 }}>{label}</div>
       <div style={{ color: "#162235", fontSize: 28, fontWeight: 900, marginTop: 4 }}>{value}</div>
     </Panel>
+  );
+  if (typeof onClick !== "function") return inner;
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`${label}: ${value}. Open appointments.`}
+      onClick={onClick}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
+      onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 8px 24px rgba(22,58,107,.14)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}
+      onFocus={(e) => { e.currentTarget.style.boxShadow = "0 0 0 3px rgba(22,58,107,.18)"; }}
+      onBlur={(e) => { e.currentTarget.style.boxShadow = "none"; }}
+      style={{ cursor: "pointer", borderRadius: 8, outline: "none", transition: "transform .18s, box-shadow .18s" }}
+    >
+      {inner}
+    </div>
   );
 }
