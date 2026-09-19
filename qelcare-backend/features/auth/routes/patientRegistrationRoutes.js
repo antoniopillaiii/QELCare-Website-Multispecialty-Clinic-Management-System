@@ -309,8 +309,9 @@ router.post("/register/resend", async (req, res) => {
     const errors = validateEmail(email);
     if (errors.length > 0) return res.status(400).json({ success: false, errors, message: errors[0] });
 
+    const channel = String(req.body.channel || "email").toLowerCase();
     const userResult = await pool.query(
-      `SELECT u.user_id, u.email, u.first_name, u.status
+      `SELECT u.user_id, u.email, u.first_name, u.phone, u.alternate_phone, u.status
          FROM users u
          JOIN roles r ON u.role_id = r.role_id
         WHERE LOWER(u.email) = LOWER($1) AND r.role_name = 'Patient'`,
@@ -323,6 +324,8 @@ router.post("/register/resend", async (req, res) => {
     if (user.status === "deactivated") return res.status(403).json({ success: false, code: "ACCOUNT_DEACTIVATED", message: "Account is deactivated." });
 
     const result = await authService.resendOTP(email, {
+      channel,
+      phone: user.phone || user.alternate_phone || null,
       skipUserCheck: true,
       purpose: OTP_PURPOSE_REGISTRATION,
       firstName: user.first_name,
@@ -332,6 +335,7 @@ router.post("/register/resend", async (req, res) => {
     return res.status(result.status || (result.success ? 200 : 400)).json({
       success: result.success,
       code: result.code,
+      channel: result.channel,
       retry_after: result.retry_after,
       dev_fallback: Boolean(result.dev),
       message: result.message,
@@ -452,6 +456,7 @@ router.post("/profile/otp", authenticate, authorize(["Patient"]), async (req, re
     if (user.status !== "verified") return res.status(403).json({ success: false, code: "NOT_VERIFIED", message: "Account must be verified first." });
 
     const result = await authService.sendOTP(user.email, {
+      channel: String(req.body.channel || "email").toLowerCase(),
       purpose: OTP_PURPOSE_PROFILE,
       firstName: user.first_name,
       subject: "QELCare - Profile Update Verification Code",
@@ -459,6 +464,7 @@ router.post("/profile/otp", authenticate, authorize(["Patient"]), async (req, re
     return res.status(result.status || (result.success ? 200 : 400)).json({
       success: result.success,
       code: result.code,
+      channel: result.channel,
       retry_after: result.retry_after,
       dev_fallback: Boolean(result.dev),
       message: result.message,

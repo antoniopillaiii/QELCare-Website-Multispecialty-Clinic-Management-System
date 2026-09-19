@@ -3,6 +3,8 @@ const Patient = require("../../patient/models/Patient");
 const Queue = require("../../queue/models/Queue");
 const Notification = require("../../notification/models/Notification");
 const emailNotifier = require("../../../shared/utils/emailNotifier");
+const smsNotifier = require("../../../shared/utils/smsNotifier");
+const patientNotifier = require("../../../shared/utils/patientNotifier");
 const logger = require("../../../shared/utils/activityLogger");
 const db = require("../../../config/database");
 const { sweepStaleQueue } = require("../../../shared/utils/queueSweep");
@@ -166,6 +168,15 @@ async function notifyPatient({ userId, appointment, title, message, type = "appo
         booked_for: appointment.booked_for,
       },
     });
+
+    // Also push to the recipient's registered devices (patient mobile APK).
+    // Best-effort: staff bookers simply have no tokens, and any failure here is
+    // swallowed inside patientNotifier so it never affects the request.
+    await patientNotifier.pushToUser(userId, {
+      title,
+      body: message,
+      data: { link: link || "/patient/appointments", appointment_id: String(appointment.id || "") },
+    });
   } catch (err) {
     console.error("Notification create error:", err.message);
   }
@@ -184,6 +195,24 @@ async function emailPatient({ appointment, status }) {
     });
   } catch (err) {
     console.error("Appointment email notification error:", err.message);
+  }
+
+  // SMS the actual patient (p.phone), NOT the booker — so a staff member who
+  // books on a patient's behalf is never texted. Best-effort and independent
+  // of the email above; the SMS layer no-ops safely when unconfigured.
+  try {
+    if (appointment.patient_phone) {
+      await smsNotifier.sendAppointmentSms({
+        to: appointment.patient_phone,
+        patientName: appointment.patient_name,
+        doctorName: appointment.doctor_name,
+        date: appointment.date,
+        time: appointment.time,
+        status,
+      });
+    }
+  } catch (err) {
+    console.error("Appointment SMS notification error:", err.message);
   }
 }
 

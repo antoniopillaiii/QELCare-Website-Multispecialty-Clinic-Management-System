@@ -1,6 +1,39 @@
 const Notification = require("../models/Notification");
+const DeviceToken = require("../models/DeviceToken");
 
 const notificationController = {
+  // Register (or refresh) an FCM device token for the authenticated user so the
+  // backend can push OS notifications to this device.
+  async registerDeviceToken(req, res) {
+    try {
+      const token = String(req.body.token || "").trim();
+      const platform = String(req.body.platform || "android").trim().toLowerCase();
+      if (!token) {
+        return res.status(400).json({ success: false, message: "Device token is required." });
+      }
+      await DeviceToken.register({ user_id: req.user.user_id, token, platform });
+      res.json({ success: true, message: "Device registered for notifications." });
+    } catch (err) {
+      console.error("Register device token error:", err.message);
+      res.status(500).json({ success: false, message: "Failed to register device." });
+    }
+  },
+
+  // Remove a device token (called on logout). Scoped to the caller's own tokens.
+  async removeDeviceToken(req, res) {
+    try {
+      const token = String(req.body.token || req.query.token || "").trim();
+      if (!token) {
+        return res.status(400).json({ success: false, message: "Device token is required." });
+      }
+      await DeviceToken.removeForUser({ user_id: req.user.user_id, token });
+      res.json({ success: true, message: "Device removed from notifications." });
+    } catch (err) {
+      console.error("Remove device token error:", err.message);
+      res.status(500).json({ success: false, message: "Failed to remove device." });
+    }
+  },
+
   async getMine(req, res) {
     try {
       const rows = await Notification.findForUser(req.user.user_id, {

@@ -17,6 +17,7 @@ const crypto = require("crypto");
 const bcrypt = require("bcrypt");
 const pool = require("../../../config/database");
 const emailNotifier = require("../../../shared/utils/emailNotifier");
+const smsNotifier = require("../../../shared/utils/smsNotifier");
 
 // OTP validity. Kept generous (10 min) because the code is emailed: transactional
 // delivery (Brevo) + inbox/spam latency can eat a minute or two, and the backend
@@ -47,6 +48,10 @@ const CODES = {
   EMAIL_NOT_CONFIGURED: "EMAIL_NOT_CONFIGURED",
   EMAIL_RATE_LIMITED: "EMAIL_RATE_LIMITED",
   EMAIL_FAILED: "EMAIL_FAILED",
+  NO_PHONE: "NO_PHONE",
+  SMS_NOT_CONFIGURED: "SMS_NOT_CONFIGURED",
+  SMS_RATE_LIMITED: "SMS_RATE_LIMITED",
+  SMS_FAILED: "SMS_FAILED",
   NO_CODE: "NO_CODE",
   ALREADY_USED: "ALREADY_USED",
   EXPIRED: "EXPIRED",
@@ -72,7 +77,7 @@ function getClient(client) {
 
 async function findUserByEmail(email, client = pool) {
   const result = await client.query(
-    `SELECT u.user_id, u.email, u.first_name, u.status, r.role_name
+    `SELECT u.user_id, u.email, u.first_name, u.phone, u.alternate_phone, u.status, r.role_name
        FROM users u
        JOIN roles r ON r.role_id = u.role_id
       WHERE LOWER(u.email) = LOWER($1)`,
@@ -192,10 +197,56 @@ async function deliverOtpEmail(email, otp, options = {}) {
     status: 200,
     code: CODES.OK,
     dev: Boolean(emailResult.dev),
+    channel: "email",
     message: emailResult.dev
       ? "Verification code generated (check the server console — email could not be sent)."
       : "Verification code sent to your email.",
   };
+}
+
+// ---------------------------------------------------------------------------
+// deliverOtpSms — send a previously-generated OTP by SMS. No DB access.
+//   Used when the caller requests channel:"sms" (e.g. email is slow on weak
+//   mobile data). Returns the same result shape as deliverOtpEmail.
+// ---------------------------------------------------------------------------
+async function deliverOtpSms(phone, otp) {
+  if (!smsNotifier.normalizePhone(phone)) {
+    return { success: false, status: 400, code: CODES.NO_PHONE, message: "No valid mobile number on file. Use email instead." };
+  }
+
+  const smsResult = await smsNotifier.sendOtpSms({ to: phone, otp, ttlMinutes: OTP_TTL_MINUTES });
+
+  if (!smsResult.ok) {
+    if (smsResult.skipped && /not configured/i.test(smsResult.reason || "")) {
+      return { success: false, status: 503, code: CODES.SMS_NOT_CONFIGURED, message: "SMS service is not configured. Use email instead." };
+    }
+    if (smsResult.rateLimited) {
+      return { success: false, status: 429, code: CODES.SMS_RATE_LIMITED, message: "SMS service is busy. Please wait and try again." };
+    }
+    return { success: false, status: 502, code: CODES.SMS_FAILED, message: "Failed to send SMS code. Please try again or use email." };
+  }
+
+  return {
+    success: true,
+    status: 200,
+    code: CODES.OK,
+    dev: Boolean(smsResult.dev),
+    channel: "sms",
+    message: smsResult.dev
+      ? "Verification code generated (check the server console — SMS could not be sent)."
+      : "Verification code sent by SMS.",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// deliverOtp — channel dispatcher. channel:"sms" -> SMS, otherwise email.
+// ---------------------------------------------------------------------------
+async function deliverOtp(email, otp, options = {}) {
+  const channel = String(options.channel || "email").toLowerCase();
+  if (channel === "sms") {
+    return deliverOtpSms(options.phone, otp);
+  }
+  return deliverOtpEmail(email, otp, options);
 }
 
 async function sendOTP(email, options = {}) {
@@ -203,15 +254,24 @@ async function sendOTP(email, options = {}) {
   const normalizedEmail = normalizeEmail(email);
   const purpose = options.purpose || PURPOSES.PASSWORD_RESET;
 
+  const channel = String(options.channel || "email").toLowerCase();
+
   try {
     let firstName = options.firstName;
+    let phone = options.phone || null;
 
     if (!options.skipUserCheck) {
       const user = await findUserByEmail(normalizedEmail, db);
       if (!user) {
         // Anti-enumeration: respond exactly like a successful send so a caller
         // cannot probe which emails map to real accounts. No OTP is created or sent.
-        return { success: true, status: 200, code: CODES.OK, message: "Verification code sent to your email." };
+        return {
+          success: true,
+          status: 200,
+          code: CODES.OK,
+          channel,
+          message: channel === "sms" ? "Verification code sent." : "Verification code sent to your email.",
+        };
       }
       if (user.status === "deactivated") {
         return { success: false, status: 403, code: CODES.ACCOUNT_DEACTIVATED, message: "Account is deactivated." };
@@ -223,6 +283,13 @@ async function sendOTP(email, options = {}) {
         return { success: false, status: 403, code: CODES.WRONG_ROLE, message: "Only patient accounts can use this verification flow." };
       }
       firstName = firstName || user.first_name;
+      if (!phone) phone = user.phone || user.alternate_phone || null;
+    }
+
+    // SMS requested but no usable number — fail clearly BEFORE creating an OTP
+    // row, so the frontend can nudge the user back to email.
+    if (channel === "sms" && !smsNotifier.normalizePhone(phone)) {
+      return { success: false, status: 400, code: CODES.NO_PHONE, message: "No mobile number on file for SMS. Please use email instead." };
     }
 
     // Persist on the POOL (never a caller transaction client) so no network I/O
@@ -231,7 +298,9 @@ async function sendOTP(email, options = {}) {
     const persisted = await persistOtpRow(normalizedEmail, purpose, pool);
     if (!persisted.ok) return persisted.result;
 
-    const delivery = await deliverOtpEmail(normalizedEmail, persisted.otp, {
+    const delivery = await deliverOtp(normalizedEmail, persisted.otp, {
+      channel,
+      phone,
       firstName,
       subject: options.subject,
     });
@@ -328,5 +397,7 @@ module.exports = {
   resendOTP,
   persistOtpRow,
   deliverOtpEmail,
+  deliverOtpSms,
+  deliverOtp,
   generateOTP,
 };

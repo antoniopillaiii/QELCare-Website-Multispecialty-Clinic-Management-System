@@ -120,8 +120,10 @@ export default function EmailVerification() {
     }
   };
 
-  // -- Resend OTP --------------------------------------------
-  const handleResend = async () => {
+  // -- Resend OTP (email or SMS) -----------------------------
+  // channel:"sms" delivers the code by text — useful when email is slow on weak
+  // mobile data. The backend looks up the account's phone; no number is typed here.
+  const handleResend = async (channel = "email") => {
     if (!canResend || loading) return;
     setLoading(true); setError("");
     try {
@@ -132,14 +134,15 @@ export default function EmailVerification() {
       const res  = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, channel }),
       });
       const data = await res.json();
 
       if (data.success) {
         setTimer(600); setResendIn(60);
         setCode(["","","","","",""]);
-        setSuccess("New code sent!"); setTimeout(() => setSuccess(""), 2000);
+        const via = (data.channel || channel) === "sms" ? "by SMS" : "to your email";
+        setSuccess(`New code sent ${via}!`); setTimeout(() => setSuccess(""), 2500);
       } else {
         setError(data.message || "Failed to resend.");
       }
@@ -365,9 +368,15 @@ export default function EmailVerification() {
                       <button className="btn" onClick={handleVerify} disabled={loading || !!success}>
                         {loading ? "Verifying..." : isRegistration ? "Verify Account" : "Verify Code"}
                       </button>
-                      <button className="btn-ghost" onClick={handleResend} disabled={!canResend || loading}>
-                        {loading ? "Sending..." : canResend ? "Resend Code" : `Resend in ${resendIn}s`}
+                      <button className="btn-ghost" onClick={() => handleResend("email")} disabled={!canResend || loading}>
+                        {loading ? "Sending..." : canResend ? "Resend by email" : `Resend in ${resendIn}s`}
                       </button>
+                      <button className="btn-ghost" onClick={() => handleResend("sms")} disabled={!canResend || loading}>
+                        Send code via SMS
+                      </button>
+                      <p className="otp-helper" style={{ textAlign: "center", marginTop: 2 }}>
+                        Email slow on weak signal? Get the code by SMS instead.
+                      </p>
                     </div>
                   </div>
                 </>

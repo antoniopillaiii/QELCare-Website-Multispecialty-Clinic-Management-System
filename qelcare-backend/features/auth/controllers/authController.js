@@ -250,16 +250,19 @@ const logoutAll = async (req, res) => {
 const sendOTP = async (req, res) => {
   try {
     const { email } = req.body;
+    const channel = String(req.body.channel || "email").toLowerCase();
     const errors = validateEmail(email);
     if (errors.length > 0) return res.status(400).json({ success: false, errors });
 
     const result = await authService.sendOTP(email, {
+      channel,
       purpose: authService.PURPOSES.PASSWORD_RESET,
       subject: "QELCare - Password Reset Verification Code",
     });
     res.status(result.status || (result.success ? 200 : 400)).json({
       success: result.success,
       code: result.code,
+      channel: result.channel,
       retry_after: result.retry_after,
       dev_fallback: Boolean(result.dev),
       message: result.message,
@@ -298,16 +301,19 @@ const verifyOTP = async (req, res) => {
 const resendOTP = async (req, res) => {
   try {
     const { email } = req.body;
+    const channel = String(req.body.channel || "email").toLowerCase();
     const errors = validateEmail(email);
     if (errors.length > 0) return res.status(400).json({ success: false, errors });
 
     const result = await authService.resendOTP(email, {
+      channel,
       purpose: authService.PURPOSES.PASSWORD_RESET,
       subject: "QELCare - Password Reset Verification Code",
     });
     res.status(result.status || (result.success ? 200 : 400)).json({
       success: result.success,
       code: result.code,
+      channel: result.channel,
       retry_after: result.retry_after,
       dev_fallback: Boolean(result.dev),
       message: result.message,

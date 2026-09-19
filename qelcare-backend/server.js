@@ -6,6 +6,7 @@ require("dotenv").config();
 
 const tokenManager = require("./shared/utils/tokenManager");
 const Appointment = require("./features/appointment/models/Appointment");
+const DeviceToken = require("./features/notification/models/DeviceToken");
 const { sweepStaleQueue } = require("./shared/utils/queueSweep");
 
 const app = express();
@@ -189,6 +190,13 @@ app.use((err, _req, res, _next) => {
 
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => console.log(`QELCare backend running on http://localhost:${PORT}`));
+
+// Ensure the push-notification device-token table exists (idempotent). Runs once
+// at boot so there is no separate migration step on deploy; guarded so a DDL
+// permission issue can never crash the server.
+DeviceToken.ensureSchema()
+  .then(() => console.log("device_tokens table ready."))
+  .catch((err) => console.error("device_tokens ensureSchema error:", err.message));
 
 setInterval(async () => {
   try {
