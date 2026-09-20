@@ -173,7 +173,12 @@ export default function AdminDashboard() {
 
   // -- Derived values ----------------------------------------------------------
   const totalUsers    = loadingUsers ? "-" : users.length;
-  const totalPatients = loadingUsers ? "-" : users.filter(u => u.role === "Patient").length;
+  // Active patient RECORDS, matching the Patients module this card links to.
+  // It used to count users with the Patient role, which is a different number
+  // by design: a patient record can exist with no login (added by admin or
+  // frontdesk) and clinic staff can themselves be patients. Counting accounts
+  // here meant the card showed one figure and the page it opened showed another.
+  const totalPatients = dashData?.metrics?.total_patients ?? "-";
 
   const appointmentsToday = dashData?.metrics?.appointments_today ?? "-";
   const activeQueue       = dashData?.metrics?.active_queue       ?? "-";

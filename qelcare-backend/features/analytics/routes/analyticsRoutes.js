@@ -518,7 +518,17 @@ router.get("/dashboard", async (req, res) => {
            FROM queue_entries
            WHERE queue_date = CURRENT_DATE
              AND status IN ('WAITING','IN_PROGRESS')
-          )::int AS active_queue
+          )::int AS active_queue,
+          -- Count active PATIENT RECORDS, which is what the Patients module
+          -- shows. The dashboard used to count users with the Patient role
+          -- instead, and the two legitimately differ: a patient record can
+          -- exist with no login (added by admin/frontdesk), and clinic staff
+          -- can themselves be patients. Counting records keeps the dashboard
+          -- card consistent with the page it links to.
+          (SELECT COUNT(*)
+           FROM patients
+           WHERE is_active
+          )::int AS total_patients
       `),
       pool.query(`
         SELECT
@@ -573,6 +583,7 @@ router.get("/dashboard", async (req, res) => {
           appointments_today: metrics.rows[0].appointments_today,
           completed_today: metrics.rows[0].completed_today,
           active_queue: metrics.rows[0].active_queue,
+          total_patients: metrics.rows[0].total_patients,
         },
         weekly: weekly.rows,
         dept_today: deptToday.rows,
