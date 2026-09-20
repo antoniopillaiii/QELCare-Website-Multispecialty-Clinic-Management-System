@@ -51,7 +51,7 @@ const NAV_BY_ROLE = {
     { id: "profile", label: "Profile Settings", icon: Icons.profile, path: "/frontdesk/profile" },
   ],
   Nurse: [
-    { id: "station", label: "Dashboard", icon: Icons.nurseQueue, path: "/nurse-station" },
+    { id: "station", label: "Nurse Dashboard", icon: Icons.nurseQueue, path: "/nurse-station" },
     { id: "appointments", label: "Appointments", icon: Icons.appointments, path: "/nurse/appointments" },
     { id: "profile", label: "Profile Settings", icon: Icons.profile, path: "/nurse/profile" },
   ],

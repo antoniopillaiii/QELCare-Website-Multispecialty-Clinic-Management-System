@@ -115,14 +115,17 @@ export default function AdminInquiries() {
   const runSearch = () => { setPage(1); setQuery(search.trim()); };
 
   return (
-    <MainLayout>
+    <MainLayout pageTitle="Inquiries" pageSubtitle="Booking requests and questions submitted without an account">
     <div style={{ padding: 22, background: BG, minHeight: "100%" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+        {/* The static description now lives in the Topbar subtitle; only the
+            live count is worth repeating here. */}
         <div>
-          <h1 style={{ margin: 0, color: NAVY, fontSize: 24, fontWeight: 900 }}>Inquiries Inbox</h1>
-          <div style={{ color: MUTED, fontSize: 13, marginTop: 2 }}>
-            Booking requests and questions submitted without an account. {newCount > 0 ? `${newCount} new on this page.` : ""}
-          </div>
+          {newCount > 0 && (
+            <div style={{ color: MUTED, fontSize: 13, fontWeight: 700 }}>
+              {newCount} new on this page.
+            </div>
+          )}
         </div>
         <ExportMenu filename="qelcare-inquiries" title="QELCare Inquiries" subtitle={`${total} total`} columns={EXPORT_COLUMNS} rows={rows} />
       </div>

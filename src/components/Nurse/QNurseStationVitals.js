@@ -101,7 +101,7 @@ export default function QNurseStationVitals() {
   };
 
   return (
-    <MainLayout pageTitle="Nurse Vitals Workbench" pageSubtitle="Today's active queue and vitals entry shortcuts">
+    <MainLayout pageTitle="Nurse Dashboard" pageSubtitle="Today's active queue and vitals entry shortcuts">
       <div style={{ display: "grid", gap: 14 }}>
         <ErrorState message={error} />
 

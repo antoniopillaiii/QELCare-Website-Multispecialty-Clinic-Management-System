@@ -530,8 +530,6 @@ export default function AdminRecords() {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 22, flexWrap: "wrap" }}>
         <div>
-          <div style={{ fontSize: 11, fontWeight: 900, color: C.muted, letterSpacing: ".08em", textTransform: "uppercase" }}>Admin</div>
-          <h1 style={{ margin: "4px 0 4px", color: C.navy, fontSize: 24, lineHeight: 1.2 }}>Medical Records</h1>
           <div style={{ color: C.text, fontSize: 13 }}>Review doctor-authored records. Clinical edits are restricted to doctors.</div>
         </div>
         <div style={{ display: "flex", gap: 10 }}>

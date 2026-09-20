@@ -272,7 +272,13 @@ export default function Topbar({ sideOpen, onToggle, pageTitle, pageSubtitle }) 
 
   const fullName = user ? `${user.first_name} ${user.last_name}` : role;
   const location = window.location.pathname;
-  const page = PAGE_TITLES[location] || { title: pageTitle || "Dashboard", sub: pageSubtitle || today };
+  // The pageTitle a module passes to MainLayout wins; PAGE_TITLES is only the
+  // fallback for routes that pass nothing. It used to be the other way round,
+  // so editing a module's pageTitle silently did nothing on any mapped route.
+  const mapped = PAGE_TITLES[location];
+  const page = pageTitle
+    ? { title: pageTitle, sub: pageSubtitle || (mapped && mapped.sub) || today }
+    : (mapped || { title: "Dashboard", sub: pageSubtitle || today });
   const topNotification = useMemo(() => notifications.find((item) => !item.is_read), [notifications]);
   // The bell shows only unread notifications: once an item is read — by opening
   // it or via "Read all" — it leaves the panel, matching the unread badge. The
@@ -320,9 +326,13 @@ export default function Topbar({ sideOpen, onToggle, pageTitle, pageSubtitle }) 
         </button>
 
         <div>
-          <div style={{ fontSize: 16, fontWeight: 800, color: "#0f2744", lineHeight: 1.2 }}>
+          {/* This is the page's single <h1>. Modules used to render their own
+              heading with the same text, which both duplicated it on screen and
+              gave the page two competing titles. `margin: 0` keeps the h1
+              looking exactly like the div it replaced. */}
+          <h1 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: "#0f2744", lineHeight: 1.2 }}>
             {page.title}
-          </div>
+          </h1>
           <div style={{ fontSize: 11.5, color: "#8a97a8", marginTop: 1 }}>{page.sub || today}</div>
         </div>
       </div>

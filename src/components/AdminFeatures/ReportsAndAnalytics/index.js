@@ -231,9 +231,9 @@ function AnalyticsReports() {
               <div style={{ color: C.muted, fontSize: 11, fontWeight: 900, letterSpacing: ".08em", textTransform: "uppercase" }}>
                 Admin Analytics
               </div>
-              <h1 style={{ margin: "5px 0 6px", color: C.text, fontSize: 26, lineHeight: 1.2 }}>
+              <h2 style={{ margin: "5px 0 6px", color: C.text, fontSize: 26, lineHeight: 1.2, fontWeight: 800 }}>
                 AI Insights Report
-              </h1>
+              </h2>
               <p style={{ margin: 0, color: C.muted, fontSize: 14, lineHeight: 1.55, maxWidth: 720 }}>
                 Generate a clinic operations summary from appointment, department, and queue activity.
               </p>
