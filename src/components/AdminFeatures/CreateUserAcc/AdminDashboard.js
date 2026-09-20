@@ -115,13 +115,17 @@ function formatTime(t) {
 // --- Main Component -----------------------------------------------------------
 export default function AdminDashboard() {
   const navigate = useNavigate();
-  const [user, setUser]             = useState(null);
   const [users, setUsers]           = useState([]);
   const [loadingUsers, setLU]       = useState(true);
   const [dashData, setDashData]     = useState(null);
   const [loadingDash, setLD]        = useState(true);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [statusFilter, setStatusFilter] = useState("ALL");
+  // A failed load used to be swallowed to the console, so a dead API looked
+  // exactly like a quiet day: metrics showed "-", the chart said "No data yet"
+  // and the table said "No appointments scheduled today." An admin had no way
+  // to tell the difference. This surfaces it instead.
+  const [loadError, setLoadError] = useState("");
   const intervalRef = useRef(null);
 
   // -- Fetch users (for user distribution) ------------------------------------
@@ -129,8 +133,13 @@ export default function AdminDashboard() {
     try {
       const res  = await authFetch("/users");
       const data = await res.json();
-      if (data.success) setUsers(data.data);
-    } catch (e) { console.error(e); }
+      if (!data.success) throw new Error(data.message || "Failed to load users.");
+      setUsers(data.data);
+      return true;
+    } catch (e) {
+      console.error(e);
+      return false;
+    }
     finally { setLU(false); }
   }, []);
 
@@ -139,17 +148,22 @@ export default function AdminDashboard() {
     try {
       const res  = await authFetch("/analytics/dashboard");
       const data = await res.json();
-      if (data.success) {
-        setDashData(data.data);
-        setLastRefresh(new Date());
-      }
-    } catch (e) { console.error(e); }
+      if (!data.success) throw new Error(data.message || "Failed to load dashboard data.");
+      setDashData(data.data);
+      setLastRefresh(new Date());
+      setLoadError("");
+      return true;
+    } catch (e) {
+      console.error(e);
+      // Keep whatever was last loaded on screen rather than blanking it, and
+      // say plainly that the figures are stale.
+      setLoadError("Could not refresh dashboard data. The figures below may be out of date.");
+      return false;
+    }
     finally { setLD(false); }
   }, []);
 
   useEffect(() => {
-    const stored = localStorage.getItem("user");
-    if (stored) setUser(JSON.parse(stored));
     fetchUsers();
     fetchDash();
     // Auto-refresh every 60 seconds
@@ -195,9 +209,6 @@ export default function AdminDashboard() {
   const today = new Date().toLocaleDateString("en-PH", {
     weekday: "long", year: "numeric", month: "long", day: "numeric",
   });
-  const firstName = user?.first_name || "Admin";
-  const fullName  = user ? `${user.first_name} ${user.last_name}` : "Administrator";
-
   // Each card deep-links to its module. "today" is resolved to the current
   // Manila date by the Appointments page, which reads ?date / ?status.
   const METRICS = [
@@ -220,43 +231,62 @@ export default function AdminDashboard() {
     <MainLayout>
       <style>{shimmerStyle}</style>
 
-      {/* -- Page Header -------------------------------------------------------- */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 22, flexWrap: "wrap", gap: 12 }}>
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 3 }}>Overview</div>
-          <div style={{ fontSize: 21, fontWeight: 800, color: C.navy, letterSpacing: "-.02em" }}>Administrator Dashboard</div>
-          <div style={{ fontSize: 12.5, color: C.muted, marginTop: 3 }}>{today}</div>
-        </div>
+      {/* -- Page Header --------------------------------------------------------
+          The Topbar already shows "Administrator Dashboard" and the signed-in
+          user, so repeating both here pushed the metrics below the fold and
+          showed the admin's name twice on one screen. What is left is the part
+          the Topbar does NOT provide: today's date and the refresh control. */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 12 }}>
+        <div style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>{today}</div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {/* Refresh button */}
+        {/* Refresh button. aria-live lets a screen reader announce the refresh
+            without the user having to hunt for the changed timestamp. */}
+        <button
+          onClick={handleRefresh}
+          disabled={loadingDash}
+          aria-live="polite"
+          style={{
+            display: "flex", alignItems: "center", gap: 6,
+            background: "#fff", border: `1px solid ${C.border}`,
+            borderRadius: 10, padding: "8px 13px",
+            cursor: loadingDash ? "not-allowed" : "pointer",
+            fontSize: 12, fontWeight: 600, color: C.muted,
+            opacity: loadingDash ? 0.6 : 1,
+          }}
+        >
+          <span style={{ display: "grid", placeItems: "center", color: C.blue }}>{IC.refresh}</span>
+          {loadingDash ? "Refreshing..." : lastRefresh ? `Refreshed ${lastRefresh.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" })}` : "Refresh"}
+        </button>
+      </div>
+
+      {/* Stale-data banner. role="alert" so it is announced; it sits above the
+          metrics because it changes how every number below should be read. */}
+      {loadError && (
+        <div
+          role="alert"
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            gap: 12, flexWrap: "wrap",
+            marginBottom: 16, padding: "11px 14px",
+            background: C.amberL, border: `1px solid #f2d9a8`, borderRadius: 12,
+            color: C.amber, fontSize: 13, fontWeight: 700,
+          }}
+        >
+          <span>{loadError}</span>
           <button
             onClick={handleRefresh}
             disabled={loadingDash}
             style={{
-              display: "flex", alignItems: "center", gap: 6,
-              background: "#fff", border: `1px solid ${C.border}`,
-              borderRadius: 10, padding: "8px 13px", cursor: "pointer",
-              fontSize: 12, fontWeight: 600, color: C.muted,
-              opacity: loadingDash ? 0.6 : 1,
+              background: "#fff", border: `1px solid #f2d9a8`, borderRadius: 9,
+              padding: "6px 12px", fontSize: 12, fontWeight: 800, color: C.amber,
+              cursor: loadingDash ? "not-allowed" : "pointer",
+              opacity: loadingDash ? 0.6 : 1, fontFamily: "inherit",
             }}
           >
-            <span style={{ display: "grid", placeItems: "center", color: C.blue }}>{IC.refresh}</span>
-            {loadingDash ? "Refreshing..." : lastRefresh ? `Refreshed ${lastRefresh.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" })}` : "Refresh"}
+            {loadingDash ? "Retrying..." : "Retry"}
           </button>
-
-          {/* User pill */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#fff", border: `1px solid ${C.border}`, borderRadius: 12, padding: "9px 14px" }}>
-            <div style={{ width: 34, height: 34, borderRadius: "50%", background: "linear-gradient(135deg,#0f2744,#163a6b)", display: "grid", placeItems: "center", color: "#fff", fontWeight: 800, fontSize: 13 }}>
-              {firstName[0]?.toUpperCase()}
-            </div>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.navy }}>{fullName}</div>
-              <div style={{ fontSize: 11, color: C.muted }}>Administrator</div>
-            </div>
-          </div>
         </div>
-      </div>
+      )}
 
       {/* -- Metric Cards (clickable — deep-link to each module) ---------------- */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 12, marginBottom: 20 }}>
@@ -350,14 +380,19 @@ export default function AdminDashboard() {
           {/* Header */}
           <div style={{ padding: "14px 18px", borderBottom: `1px solid #f0f4f9`, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
             <div style={{ fontSize: 14, fontWeight: 800, color: C.navy }}>Today's Appointments</div>
-            {/* Status filter tabs */}
-            <div style={{ display: "flex", gap: 6 }}>
+            {/* Status filter tabs. These are toggles, so each exposes
+                aria-pressed — without it a screen reader reads five identical
+                buttons with no indication of which filter is active. The colour
+                change alone also fails contrast-independent identification. */}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }} role="group" aria-label="Filter today's appointments by status">
               {["ALL", "PENDING", "CONFIRMED", "IN_QUEUE", "COMPLETED"].map(s => {
                 const active = statusFilter === s;
                 const cfg = s === "ALL" ? { label: "All", bg: C.blueL, color: C.blue } : STATUS_CFG[s];
                 return (
                   <button
                     key={s}
+                    type="button"
+                    aria-pressed={active}
                     onClick={() => setStatusFilter(s)}
                     style={{
                       fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 99,
@@ -365,6 +400,7 @@ export default function AdminDashboard() {
                       background: active ? cfg.bg : "#fff",
                       color: active ? cfg.color : C.muted,
                       cursor: "pointer",
+                      fontFamily: "inherit",
                     }}
                   >
                     {s === "ALL" ? "All" : STATUS_CFG[s].label}
@@ -382,7 +418,10 @@ export default function AdminDashboard() {
           </div>
 
           {/* Table body */}
-          <div style={{ maxHeight: 300, overflowY: "auto" }}>
+          {/* No inner max-height/scroll: the list is paginated below, and having
+              both an inner scrollbar and a pager to reach the same rows is
+              needlessly fiddly. The page count controls the height instead. */}
+          <div>
             {loadingDash ? (
               [1, 2, 3, 4].map(i => (
                 <div key={i} style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr .85fr .7fr .8fr", gap: 8, padding: "10px 18px", borderBottom: `1px solid #f8fafd` }}>

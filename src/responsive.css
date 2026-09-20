@@ -87,6 +87,34 @@ img { max-width: 100%; height: auto; }
   }
 }
 
+/* ---------- Tablet / small laptop: step the densest grids down ----------
+   Between the phone rule above and a roomy desktop there was a dead zone. A
+   5-track stat row (admin dashboard, frontdesk, nurse station, reports) renders
+   ~120px cards at 1024px and the labels wrap to two lines; the 4-track filter
+   bars (appointments, billing) get equally cramped. Stepping 4–5 tracks down to
+   2 (then 3 on wider laptops) keeps the cards readable instead of waiting for
+   the 640px collapse. Same mechanism as above: `!important` beats inline styles,
+   and auto-fit/auto-fill grids are left alone because they already reflow. */
+@media (min-width: 641px) and (max-width: 900px) {
+  .qc-main [style*="repeat(4,"],
+  .qc-main [style*="repeat(5,"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .qc-main [style*="1fr 280px"],
+  .qc-main [style*="1.6fr 1fr"] {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (min-width: 901px) and (max-width: 1200px) {
+  .qc-main [style*="repeat(5,"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+  .qc-main [style*="repeat(4,"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
 /* ---------- Responsive tables: turn wide tables into stacked cards on phones ----------
    Add class="qc-rtable" to a <table>. Give each <td> a data-label="Column name".
    On phones the header hides and each row becomes a labeled card. Cells that hold
