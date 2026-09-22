@@ -164,9 +164,10 @@ const patientResultController = {
       }
 
       if (!gemini.apiKey()) {
+        console.error("OCR error: GEMINI_API_KEY is not set in the server environment.");
         return res.status(503).json({
           success: false,
-          message: "GEMINI_API_KEY is not set in the server environment.",
+          message: "Text extraction isn't available right now. You can still enter the document details manually.",
         });
       }
 
@@ -187,28 +188,33 @@ const patientResultController = {
     } catch (err) {
       console.error("OCR error:", err.message);
 
-      if (err.message.includes("API_KEY_INVALID") || err.message.includes("API key not valid")) {
-        return res.status(401).json({
-          success: false,
-          message: "Invalid Gemini API key. Check GEMINI_API_KEY in your .env file.",
-        });
+      // Safe, fixed messages only — the raw Gemini error stays in the log above.
+      switch (gemini.errorKind(err)) {
+        // A bad server key is a server problem: 503, never 401, because the
+        // web and mobile clients sign the patient out on any 401.
+        case "invalid_key":
+          return res.status(503).json({
+            success: false,
+            message: "Text extraction isn't available right now. You can still enter the document details manually.",
+          });
+        case "timeout":
+          return res.status(504).json({
+            success: false,
+            message: "Text extraction timed out. Try again.",
+          });
+        case "quota":
+          return res.status(429).json({
+            success: false,
+            message: "Text extraction has reached its limit for now. Please try again later, or enter the document details manually.",
+          });
+        case "unavailable":
+          return res.status(503).json({
+            success: false,
+            message: "Text extraction is busy right now. Please try again in a moment.",
+          });
+        default:
+          return res.status(500).json({ success: false, message: "Text extraction failed. Please try again." });
       }
-
-      if (err.message.toLowerCase().includes("timed out")) {
-        return res.status(504).json({
-          success: false,
-          message: "Text extraction timed out. Try again.",
-        });
-      }
-
-      if (err.message.includes("quota") || err.message.includes("RESOURCE_EXHAUSTED")) {
-        return res.status(429).json({
-          success: false,
-          message: "Gemini free tier daily limit reached. Try again tomorrow or upgrade your plan.",
-        });
-      }
-
-      res.status(500).json({ success: false, message: err.message || "Text extraction failed." });
     }
   },
 };

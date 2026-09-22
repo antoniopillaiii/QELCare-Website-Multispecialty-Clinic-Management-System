@@ -170,7 +170,8 @@ const medicationController = {
       }
 
       if (!gemini.apiKey()) {
-        return res.status(503).json({ success: false, message: "GEMINI_API_KEY is not set in the server environment." });
+        console.error("Prescription parse error: GEMINI_API_KEY is not set in the server environment.");
+        return res.status(503).json({ success: false, message: "Prescription reading isn't available right now. You can still add your medications manually." });
       }
 
       const mimeType = mime_type || "image/jpeg";
@@ -214,16 +215,21 @@ const medicationController = {
       res.json({ success: true, medications, raw_text: rawText });
     } catch (err) {
       console.error("Prescription parse error:", err.message);
-      if (err.message.includes("API_KEY_INVALID") || err.message.includes("API key not valid")) {
-        return res.status(401).json({ success: false, message: "Invalid Gemini API key. Check GEMINI_API_KEY in your .env file." });
+      // Safe, fixed messages only — the raw Gemini error stays in the log above.
+      switch (gemini.errorKind(err)) {
+        // A bad server key is a server problem: 503, never 401, because the
+        // web and mobile clients sign the patient out on any 401.
+        case "invalid_key":
+          return res.status(503).json({ success: false, message: "Prescription reading isn't available right now. You can still add your medications manually." });
+        case "timeout":
+          return res.status(504).json({ success: false, message: "Prescription reading timed out. Try again." });
+        case "quota":
+          return res.status(429).json({ success: false, message: "Prescription reading has reached its limit for now. Please try again later, or add your medications manually." });
+        case "unavailable":
+          return res.status(503).json({ success: false, message: "Prescription reading is busy right now. Please try again in a moment." });
+        default:
+          return res.status(500).json({ success: false, message: "Prescription reading failed. Please try again." });
       }
-      if (err.message.toLowerCase().includes("timed out")) {
-        return res.status(504).json({ success: false, message: "Prescription reading timed out. Try again." });
-      }
-      if (err.message.includes("quota") || err.message.includes("RESOURCE_EXHAUSTED")) {
-        return res.status(429).json({ success: false, message: "Gemini free tier daily limit reached. Try again tomorrow." });
-      }
-      res.status(500).json({ success: false, message: err.message || "Prescription reading failed." });
     }
   },
 

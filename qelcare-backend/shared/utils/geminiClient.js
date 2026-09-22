@@ -12,8 +12,8 @@
 //   GEMINI_REPORTS_MODEL  = reports model (default gemini-3.8-flash)
 //
 // The key is sent in the x-goog-api-key header, never in the URL, so it can't
-// end up in proxy/access logs. Error messages keep the exact wording the OCR
-// controllers match on ("API key not valid", "timed out", "quota", ...).
+// end up in proxy/access logs. Callers map failures with errorKind() and show
+// their own message — Gemini's raw error text is only ever logged server-side.
 // ============================================================================
 
 const https = require("https");
@@ -126,6 +126,19 @@ function responseText(response) {
     .join("");
 }
 
+// Classifies a generateContent failure so callers can show their own safe
+// message instead of passing Gemini's raw error text to the browser:
+//   invalid_key | timeout | quota | model_not_found | unavailable | failed
+function errorKind(err) {
+  const message = String(err?.message || "");
+  if (/API_KEY_INVALID|API key not valid/i.test(message)) return "invalid_key";
+  if (/timed out/i.test(message)) return "timeout";
+  if (err?.statusCode === 429 || /quota|RESOURCE_EXHAUSTED/i.test(message)) return "quota";
+  if (err?.statusCode === 404) return "model_not_found";
+  if (err?.statusCode >= 500) return "unavailable";
+  return "failed";
+}
+
 module.exports = {
   apiKey,
   ocrModel,
@@ -133,4 +146,5 @@ module.exports = {
   generateContent,
   generateFromImage,
   responseText,
+  errorKind,
 };

@@ -21,8 +21,34 @@ const gemini = require("../../../shared/utils/geminiClient");
 // built-in report instead of waiting.
 const REPORT_TIMEOUT_MS = 30000;
 // One retry for transient capacity errors ("model is experiencing high demand").
-const RETRY_STATUS_CODES = [500, 503];
 const RETRY_DELAY_MS = 2000;
+
+// Successful reports are reused while the aggregate numbers are unchanged, so
+// reloading the page or switching back to a range doesn't bill Gemini again.
+// The key is the exact data sent, so any new appointment/queue change (or a
+// new day) produces a fresh report. Fallbacks are never cached.
+const CACHE_TTL_MS = 10 * 60 * 1000;
+const CACHE_MAX_ENTRIES = 50;
+const reportCache = new Map();
+
+function cachedReport(key) {
+  const entry = reportCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    reportCache.delete(key);
+    return null;
+  }
+  return entry.report;
+}
+
+function cacheReport(key, report) {
+  reportCache.delete(key);
+  reportCache.set(key, { report, expiresAt: Date.now() + CACHE_TTL_MS });
+  // Map keeps insertion order, so the first key is the oldest entry.
+  while (reportCache.size > CACHE_MAX_ENTRIES) {
+    reportCache.delete(reportCache.keys().next().value);
+  }
+}
 
 const METRIC_KEYS = [
   "total_appointments",
@@ -182,13 +208,14 @@ function sanitizeReport(report) {
 // Short, admin-facing reason shown as the fallback reason. The raw upstream
 // error is logged server-side instead of being echoed to the browser.
 function failureReason(err, model) {
-  const message = String(err?.message || "");
-  if (/timed out/i.test(message)) return "Gemini request timed out.";
-  if (/API_KEY_INVALID|API key not valid/i.test(message)) return "Gemini API key is invalid.";
-  if (err?.statusCode === 429 || /quota|RESOURCE_EXHAUSTED/i.test(message)) return "Gemini quota reached. Try again later.";
-  if (err?.statusCode === 404) return `Gemini model "${model}" is not available.`;
-  if (err?.statusCode >= 500) return "Gemini is temporarily unavailable. Try again shortly.";
-  return "Gemini request failed.";
+  switch (gemini.errorKind(err)) {
+    case "timeout": return "Gemini request timed out.";
+    case "invalid_key": return "Gemini API key is invalid.";
+    case "quota": return "Gemini quota reached. Try again later.";
+    case "model_not_found": return `Gemini model "${model}" is not available.`;
+    case "unavailable": return "Gemini is temporarily unavailable. Try again shortly.";
+    default: return "Gemini request failed.";
+  }
 }
 
 function delay(ms) {
@@ -217,7 +244,7 @@ async function requestReport(model, data) {
   try {
     return await request();
   } catch (err) {
-    if (!RETRY_STATUS_CODES.includes(err.statusCode)) throw err;
+    if (gemini.errorKind(err) !== "unavailable") throw err;
     await delay(RETRY_DELAY_MS);
     return request();
   }
@@ -231,9 +258,14 @@ async function generateReport(input) {
   }
 
   const model = gemini.reportsModel();
+  const data = buildReportData(input);
+  const cacheKey = `${model}:${JSON.stringify(data)}`;
+  const cached = cachedReport(cacheKey);
+  if (cached) return cached;
+
   let response;
   try {
-    response = await requestReport(model, buildReportData(input));
+    response = await requestReport(model, data);
   } catch (err) {
     console.warn(`Gemini report generation failed (model: ${model}): ${err.message}`);
     throw new Error(failureReason(err, model));
@@ -247,6 +279,7 @@ async function generateReport(input) {
     err.code = "GEMINI_INVALID_JSON";
     throw err;
   }
+  cacheReport(cacheKey, report);
   return report;
 }
 

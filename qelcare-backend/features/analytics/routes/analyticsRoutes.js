@@ -1,10 +1,23 @@
 const express = require("express");
+const rateLimit = require("express-rate-limit");
 const router = express.Router();
 const { authenticate, authorize } = require("../../../shared/middleware/tokenMiddleware");
 const pool = require("../../../config/database");
 const { generateReport } = require("../services/geminiReportService");
 
 router.use(authenticate, authorize(["Admin"]));
+
+// Each AI Insights request can trigger a paid Gemini call. Capped per admin
+// account (runs after authenticate) rather than per IP, since clinic staff
+// share an IP. Cached reports keep normal use well under this.
+const aiInsightsLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `admin:${req.user?.user_id}`,
+  message: { success: false, message: "Too many AI report requests. Please wait a few minutes and try again." },
+});
 
 const RANGE_CONFIG = {
   past_7_days: { label: "Past 7 Days", days: 7 },
@@ -268,7 +281,7 @@ async function buildAiInsights(rangeKey) {
   };
 }
 
-router.get("/ai-insights", async (req, res) => {
+router.get("/ai-insights", aiInsightsLimiter, async (req, res) => {
   try {
     const result = await buildAiInsights(req.query.range);
     res.json({ success: true, data: result });
