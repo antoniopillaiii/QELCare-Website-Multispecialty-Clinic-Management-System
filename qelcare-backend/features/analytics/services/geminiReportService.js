@@ -205,13 +205,50 @@ function sanitizeReport(report) {
   };
 }
 
+// Google resets per-day quotas at midnight Pacific time. Returns when that is in
+// clinic time (Asia/Manila), e.g. "today at 3:00 PM" — 4:00 PM while the US is
+// on standard time (Nov–Mar), which is why it's computed, not hard-coded.
+function dailyQuotaReset(now = new Date()) {
+  const pacific = (instant) => Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      hourCycle: "h23",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+    }).formatToParts(instant).map((part) => [part.type, Number(part.value)])
+  );
+
+  const today = pacific(now);
+  // 06:00 UTC on the next date is always late evening of the current Pacific
+  // day (after any 2 AM DST switch), so its offset is the one in force at midnight.
+  const probe = new Date(Date.UTC(today.year, today.month - 1, today.day + 1, 6));
+  const local = pacific(probe);
+  const offsetHours = (Date.UTC(local.year, local.month - 1, local.day, local.hour) - probe.getTime()) / 3600000;
+  const reset = new Date(Date.UTC(today.year, today.month - 1, today.day + 1, -offsetHours));
+
+  const manilaDate = (instant) => instant.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+  const day = manilaDate(reset) === manilaDate(now) ? "today" : "tomorrow";
+  const time = reset.toLocaleTimeString("en-US", { timeZone: "Asia/Manila", hour: "numeric", minute: "2-digit" });
+  return `${day} at ${time}`;
+}
+
+function quotaReason(err) {
+  switch (gemini.quotaWindow(err)) {
+    case "day": return `Gemini daily limit reached. It resets ${dailyQuotaReset()} Philippine time.`;
+    case "minute": return "Gemini per-minute limit reached. Try again in about a minute.";
+    default: return "Gemini quota reached. Try again later.";
+  }
+}
+
 // Short, admin-facing reason shown as the fallback reason. The raw upstream
 // error is logged server-side instead of being echoed to the browser.
 function failureReason(err, model) {
   switch (gemini.errorKind(err)) {
     case "timeout": return "Gemini request timed out.";
     case "invalid_key": return "Gemini API key is invalid.";
-    case "quota": return "Gemini quota reached. Try again later.";
+    case "quota": return quotaReason(err);
     case "model_not_found": return `Gemini model "${model}" is not available.`;
     case "unavailable": return "Gemini is temporarily unavailable. Try again shortly.";
     default: return "Gemini request failed.";
@@ -267,7 +304,8 @@ async function generateReport(input) {
   try {
     response = await requestReport(model, data);
   } catch (err) {
-    console.warn(`Gemini report generation failed (model: ${model}): ${err.message}`);
+    const quota = err.quotaIds?.length ? `, quota: ${err.quotaIds.join(" + ")}` : "";
+    console.warn(`Gemini report generation failed (model: ${model}${quota}): ${err.message}`);
     throw new Error(failureReason(err, model));
   }
 
@@ -283,4 +321,4 @@ async function generateReport(input) {
   return report;
 }
 
-module.exports = { generateReport, buildReportData };
+module.exports = { generateReport, buildReportData, dailyQuotaReset };

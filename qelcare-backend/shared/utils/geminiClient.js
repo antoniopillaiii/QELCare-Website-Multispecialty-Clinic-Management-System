@@ -35,9 +35,20 @@ function reportsModel() {
   return process.env.GEMINI_REPORTS_MODEL || DEFAULT_REPORTS_MODEL;
 }
 
+// quotaId of each limit a 429 says was exceeded, e.g.
+// "GenerateRequestsPerDayPerProjectPerModel-FreeTier".
+function exceededQuotaIds(apiError) {
+  return (apiError.details || [])
+    .filter((detail) => /QuotaFailure/.test(detail["@type"] || ""))
+    .flatMap((detail) => detail.violations || [])
+    .map((violation) => violation.quotaId)
+    .filter(Boolean);
+}
+
 // POST /v1beta/models/{model}:generateContent and resolve the parsed response.
-// Rejects with an Error carrying `statusCode` (HTTP) and `apiStatus` (e.g.
-// "RESOURCE_EXHAUSTED") when Gemini reports a failure.
+// Rejects with an Error carrying `statusCode` (HTTP), `apiStatus` (e.g.
+// "RESOURCE_EXHAUSTED") and, for quota errors, `quotaIds` when Gemini reports
+// a failure.
 function generateContent({ model, contents, systemInstruction, generationConfig, timeoutMs = DEFAULT_TIMEOUT_MS }) {
   return new Promise((resolve, reject) => {
     const payload = { contents };
@@ -75,6 +86,7 @@ function generateContent({ model, contents, systemInstruction, generationConfig,
             const err = new Error(`Gemini API error: ${parsed.error.message || JSON.stringify(parsed.error)}`);
             err.statusCode = res.statusCode;
             err.apiStatus = parsed.error.status;
+            err.quotaIds = exceededQuotaIds(parsed.error);
             return reject(err);
           }
 
@@ -139,6 +151,15 @@ function errorKind(err) {
   return "failed";
 }
 
+// For a quota failure: "day" when a daily limit was hit (resets at midnight
+// Pacific time), "minute" for a per-minute limit, or null if Google didn't say.
+function quotaWindow(err) {
+  const ids = err?.quotaIds || [];
+  if (ids.some((id) => /PerDay/i.test(id))) return "day";
+  if (ids.some((id) => /PerMinute/i.test(id))) return "minute";
+  return null;
+}
+
 module.exports = {
   apiKey,
   ocrModel,
@@ -147,4 +168,5 @@ module.exports = {
   generateFromImage,
   responseText,
   errorKind,
+  quotaWindow,
 };
