@@ -31,7 +31,7 @@ const NAV_BY_ROLE = {
     { id: "queue", label: "Queue", icon: Icons.queue, path: "/admin/queue" },
     { id: "records", label: "Medical Records", icon: Icons.records, path: "/admin/records" },
     { id: "billing", label: "Billing", icon: Icons.billing, path: "/admin/billing" },
-    { id: "reports", label: "Reports & Analytics", icon: Icons.reports, path: "/admin/reports" },
+    { id: "reports", label: "AI Reports & Analytics", icon: Icons.reports, path: "/admin/reports" },
     { id: "logs", label: "Activity Logs", icon: Icons.logs, path: "/admin/logs" },
     { id: "profile", label: "Profile Settings", icon: Icons.profile, path: "/admin/profile" },
   ],

@@ -217,7 +217,7 @@ function AnalyticsReports() {
   };
 
   return (
-    <MainLayout pageTitle="Reports & Analytics" pageSubtitle="AI-assisted clinic operations reporting">
+    <MainLayout pageTitle="AI Reports & Analytics" pageSubtitle="AI-assisted clinic operations reporting">
       <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
         <section style={{
           background: C.white,
