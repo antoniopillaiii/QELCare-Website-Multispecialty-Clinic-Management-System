@@ -1,6 +1,6 @@
-const https = require("https");
 const Patient = require("../../patient/models/Patient");
 const PatientMedication = require("../models/PatientMedication");
+const gemini = require("../../../shared/utils/geminiClient");
 
 async function getMyPatient(req) {
   const patient = await Patient.findByUserId(req.user.user_id);
@@ -10,50 +10,6 @@ async function getMyPatient(req) {
     throw err;
   }
   return patient;
-}
-
-// --- Gemini Vision call returning raw parsed JSON ---------------------------
-function callGemini(apiKey, model, base64Image, mimeType, prompt) {
-  return new Promise((resolve, reject) => {
-    const path = `/v1beta/models/${model}:generateContent?key=${apiKey}`;
-    const body = JSON.stringify({
-      contents: [
-        {
-          parts: [
-            { text: prompt },
-            { inline_data: { mime_type: mimeType, data: base64Image } },
-          ],
-        },
-      ],
-      generationConfig: { temperature: 0.1, maxOutputTokens: 4096, responseMimeType: "application/json" },
-    });
-
-    const req = https.request(
-      {
-        hostname: "generativelanguage.googleapis.com",
-        path,
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
-        timeout: 60000,
-      },
-      (res) => {
-        let data = "";
-        res.on("data", (chunk) => { data += chunk; });
-        res.on("end", () => {
-          let parsed;
-          try { parsed = JSON.parse(data); }
-          catch { return reject(new Error("Gemini returned invalid JSON.")); }
-          if (parsed.error) return reject(new Error(`Gemini API error: ${parsed.error.message || JSON.stringify(parsed.error)}`));
-          if (res.statusCode < 200 || res.statusCode >= 300) return reject(new Error(`Gemini returned HTTP ${res.statusCode}: ${data}`));
-          resolve(parsed);
-        });
-      }
-    );
-    req.on("timeout", () => req.destroy(new Error("Gemini request timed out.")));
-    req.on("error", reject);
-    req.write(body);
-    req.end();
-  });
 }
 
 const PRESCRIPTION_PROMPT =
@@ -213,15 +169,19 @@ const medicationController = {
         return res.status(413).json({ success: false, message: "Image is too large. Max ~10 MB per page." });
       }
 
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
+      if (!gemini.apiKey()) {
         return res.status(503).json({ success: false, message: "GEMINI_API_KEY is not set in the server environment." });
       }
 
-      const model = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
       const mimeType = mime_type || "image/jpeg";
 
-      const response = await callGemini(apiKey, model, image, mimeType, PRESCRIPTION_PROMPT);
+      const response = await gemini.generateFromImage({
+        model: gemini.ocrModel(),
+        prompt: PRESCRIPTION_PROMPT,
+        base64Image: image,
+        mimeType,
+        generationConfig: { temperature: 0.1, maxOutputTokens: 4096, responseMimeType: "application/json" },
+      });
       const rawText = String(response.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
 
       let parsedJson;

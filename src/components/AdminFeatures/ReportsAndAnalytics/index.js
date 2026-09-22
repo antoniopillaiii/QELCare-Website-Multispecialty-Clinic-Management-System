@@ -109,7 +109,7 @@ function buildPrintableReport(insights) {
   const departments = insights?.charts?.departments || [];
   const appointmentDays = insights?.charts?.appointments_by_day || [];
   const queueDays = insights?.charts?.queue_by_day || [];
-  const sourceLabel = insights?.source === "ollama" ? "Ollama" : "Built-in fallback";
+  const sourceLabel = insights?.source === "gemini" ? "Gemini" : "Built-in fallback";
 
   return `<!doctype html>
 <html>
@@ -372,7 +372,7 @@ function AnalyticsReports() {
               <div>
                 <h2 style={{ margin: 0, color: C.text, fontSize: 18 }}>Generated Report</h2>
                 <p style={{ margin: "5px 0 0", color: C.muted, fontSize: 13 }}>
-                  {insights ? `${formatDate(insights.range?.startDate)} to ${formatDate(insights.range?.endDate)} / ${insights.source === "ollama" ? "Ollama" : "Built-in fallback"}` : "Select a range and generate insights."}
+                  {insights ? `${formatDate(insights.range?.startDate)} to ${formatDate(insights.range?.endDate)} / ${insights.source === "gemini" ? "Gemini" : "Built-in fallback"}` : "Select a range and generate insights."}
                 </p>
                 {insights?.fallback_reason ? (
                   <p style={{ margin: "5px 0 0", color: C.amber, fontSize: 12, fontWeight: 700 }}>

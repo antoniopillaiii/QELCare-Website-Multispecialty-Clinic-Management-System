@@ -79,7 +79,7 @@ function buildPrintableReport(data) {
   const apptDays = data?.charts?.appointments_by_day || [];
   const queueDays = data?.charts?.queue_by_day || [];
   const completionRate = percent(num(metrics.completed_visits), num(metrics.total_appointments));
-  const sourceLabel = data?.source === "ollama" ? "Ollama" : "Built-in fallback";
+  const sourceLabel = data?.source === "gemini" ? "Gemini" : "Built-in fallback";
 
   return `<!doctype html>
 <html>
@@ -183,10 +183,10 @@ function MiniBars({ title, rows, labelKey = "day_name", valueKey = "total", empt
 }
 
 function SourceBadge({ source }) {
-  const isOllama = source === "ollama";
+  const isGemini = source === "gemini";
   return (
-    <span style={{ ...styles.sourceBadge, background: isOllama ? "#e8f7ef" : "#fff7df", color: isOllama ? "#176b3a" : "#8a5a00" }}>
-      {isOllama ? "Ollama" : "Built-in fallback"}
+    <span style={{ ...styles.sourceBadge, background: isGemini ? "#e8f7ef" : "#fff7df", color: isGemini ? "#176b3a" : "#8a5a00" }}>
+      {isGemini ? "Gemini" : "Built-in fallback"}
     </span>
   );
 }
@@ -310,7 +310,7 @@ export default function AppointmentAnalyticsReport() {
               </div>
 
               {data?.fallback_reason ? (
-                <div style={styles.warning}>Ollama fallback reason: {data.fallback_reason}</div>
+                <div style={styles.warning}>Gemini fallback reason: {data.fallback_reason}</div>
               ) : null}
 
               {report.summary ? (

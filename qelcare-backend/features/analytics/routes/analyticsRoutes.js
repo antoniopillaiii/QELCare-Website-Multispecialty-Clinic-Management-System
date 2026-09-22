@@ -1,9 +1,8 @@
 const express = require("express");
-const http = require("http");
-const https = require("https");
 const router = express.Router();
 const { authenticate, authorize } = require("../../../shared/middleware/tokenMiddleware");
 const pool = require("../../../config/database");
+const { generateReport } = require("../services/geminiReportService");
 
 router.use(authenticate, authorize(["Admin"]));
 
@@ -124,229 +123,6 @@ function buildFallbackReport({ range, metrics, topDepartment, busiestDay }) {
   };
 }
 
-function normalizeAiShape(parsed) {
-  if (!parsed || typeof parsed !== "object") return null;
-
-  const summary = parsed.summary || parsed.overview || parsed.analysis || parsed.text;
-  const bullets = Array.isArray(parsed.bullets)
-    ? parsed.bullets
-    : Array.isArray(parsed.key_points)
-      ? parsed.key_points
-      : Array.isArray(parsed.metrics)
-        ? parsed.metrics
-        : [];
-  const recommendation = parsed.recommendation || parsed.recommendations || parsed.next_steps || parsed.action;
-
-  if (!summary || !recommendation) return null;
-
-  const safeBullets = bullets.length ? bullets.map((bullet) => String(bullet)) : [String(summary)];
-  return {
-    summary: String(summary),
-    bullets: safeBullets,
-    recommendation: String(recommendation),
-    text: `${summary}\n\n${safeBullets.map((bullet) => `- ${bullet}`).join("\n")}\n\n${recommendation}`,
-  };
-}
-
-function tryParseAiJson(text) {
-  if (!text) return null;
-  const trimmed = String(text).trim();
-  const candidates = [
-    trimmed,
-    trimmed.replace(/^\`\`\`json\s*/i, "").replace(/^\`\`\`\s*/i, "").replace(/\`\`\`$/i, "").trim(),
-  ];
-
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
-  }
-
-  for (const candidate of candidates) {
-    try {
-      const normalized = normalizeAiShape(JSON.parse(candidate));
-      if (normalized) return normalized;
-    } catch (_) {
-      // Try the next candidate.
-    }
-  }
-
-  return null;
-}
-
-function sanitizeReport(report) {
-  if (!report) return null;
-  const blockedTerms = [
-    /staff attendance/gi,
-    /attendance issues?/gi,
-    /top doctor/gi,
-    /doctor rankings?/gi,
-    /doctor performance/gi,
-  ];
-
-  const cleanText = (value) => {
-    let text = String(value || "").trim();
-    blockedTerms.forEach((term) => {
-      text = text.replace(term, "clinic operations");
-    });
-    return text;
-  };
-
-  const summary = cleanText(report.summary);
-  const bullets = Array.isArray(report.bullets)
-    ? report.bullets.map(cleanText).filter(Boolean)
-    : [];
-  const recommendation = cleanText(report.recommendation);
-
-  if (!summary || bullets.length === 0 || !recommendation) return null;
-
-  return {
-    summary,
-    bullets,
-    recommendation,
-    text: `${summary}\n\n${bullets.map((bullet) => `- ${bullet}`).join("\n")}\n\n${recommendation}`,
-  };
-}
-
-// Default timeout is generous because a local Ollama model can take a long time
-// on its FIRST request (cold start: the model has to load into RAM/VRAM).
-// Override with OLLAMA_TIMEOUT_MS in the environment.
-const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS) || 180000;
-
-function postJson(urlString, payload, timeoutMs = OLLAMA_TIMEOUT_MS) {
-  return new Promise((resolve, reject) => {
-    const url = new URL(urlString);
-    const body = JSON.stringify(payload);
-    const client = url.protocol === "https:" ? https : http;
-
-    const request = client.request(
-      {
-        hostname: url.hostname,
-        port: url.port || (url.protocol === "https:" ? 443 : 80),
-        path: `${url.pathname}${url.search}`,
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(body),
-        },
-        timeout: timeoutMs,
-      },
-      (response) => {
-        let data = "";
-        response.on("data", (chunk) => {
-          data += chunk;
-        });
-        response.on("end", () => {
-          if (response.statusCode < 200 || response.statusCode >= 300) {
-            reject(new Error(`Ollama responded with ${response.statusCode}`));
-            return;
-          }
-
-          try {
-            resolve(JSON.parse(data));
-          } catch (err) {
-            reject(err);
-          }
-        });
-      }
-    );
-
-    request.on("timeout", () => {
-      request.destroy(new Error("Ollama request timed out"));
-    });
-    request.on("error", reject);
-    request.write(body);
-    request.end();
-  });
-}
-
-function ollamaConfig() {
-  return {
-    url: (process.env.OLLAMA_URL || "http://localhost:11434").replace(/\/$/, ""),
-    model: process.env.OLLAMA_MODEL || "llama3.2",
-    // Keep the model resident in memory between requests so only the FIRST
-    // call after a server (or model) start pays the cold-load cost.
-    keepAlive: process.env.OLLAMA_KEEP_ALIVE || "30m",
-  };
-}
-
-// Fire-and-forget warmup: loads the model into memory shortly after boot so the
-// first real report isn't the one that eats the cold-start delay.
-async function warmupOllama() {
-  const { url, model, keepAlive } = ollamaConfig();
-  try {
-    await postJson(`${url}/api/generate`, {
-      model,
-      prompt: "ok",
-      stream: false,
-      keep_alive: keepAlive,
-      options: { num_predict: 1 },
-    });
-    console.log(`Ollama warmup complete (model: ${model}).`);
-  } catch (err) {
-    console.warn(`Ollama warmup skipped: ${err.message}`);
-  }
-}
-
-async function generateWithOllama({ range, metrics, departmentRows, appointmentDayRows, queueDayRows }) {
-  const { url, model, keepAlive } = ollamaConfig();
-  const prompt = `
-Analyze the following clinic operations data and provide a professional administrative report.
-
-Strict rules:
-- Do not include patient names or personal details.
-- Focus only on appointment volume, completed visits, queue activity, department demand, and busiest clinic day.
-- Return valid JSON only with this exact shape:
-{
-  "summary": "one paragraph",
-  "bullets": ["metric bullet", "metric bullet"],
-  "recommendation": "one concise recommendation"
-}
-
-Selected period: ${range.label} (${range.startDate} to ${range.endDate})
-Data:
-${JSON.stringify({
-    metrics,
-    departments: departmentRows,
-    appointments_by_day: appointmentDayRows,
-    queue_by_day: queueDayRows,
-  }, null, 2)}
-`;
-
-  const requestBody = {
-    model,
-    prompt,
-    format: "json",
-    stream: false,
-    keep_alive: keepAlive,
-    options: {
-      temperature: 0.2,
-      num_predict: 450,
-    },
-  };
-
-  let response;
-  try {
-    response = await postJson(`${url}/api/generate`, requestBody);
-  } catch (err) {
-    // One retry on a cold-start timeout — the first attempt likely loaded the
-    // model into memory, so the second should be fast.
-    if (String(err.message || "").toLowerCase().includes("timed out")) {
-      response = await postJson(`${url}/api/generate`, requestBody);
-    } else {
-      throw err;
-    }
-  }
-
-  const parsed = sanitizeReport(tryParseAiJson(response.response));
-  if (!parsed) {
-    const err = new Error("Ollama returned an unreadable report format.");
-    err.code = "OLLAMA_INVALID_JSON";
-    throw err;
-  }
-  return parsed;
-}
-
 async function buildAiInsights(rangeKey) {
   const range = resolveDateRange(rangeKey);
   const params = [range.startDate, range.endDate];
@@ -455,21 +231,23 @@ async function buildAiInsights(rangeKey) {
   });
 
   let report;
-  let aiSource = "ollama";
+  let aiSource = "gemini";
   let fallbackReason = null;
 
   try {
-    report = await generateWithOllama({
+    report = await generateReport({
       range,
       metrics,
       departmentRows,
       appointmentDayRows,
       queueDayRows,
+      topDepartment,
+      busiestDay,
     });
   } catch (err) {
     report = fallbackReport;
     aiSource = "fallback";
-    fallbackReason = err.message || "Ollama unavailable.";
+    fallbackReason = err.message || "Gemini unavailable.";
   }
 
   return {
@@ -758,7 +536,5 @@ router.get("/activity/recent", async (req, res) => {
     res.status(500).json({ success: false, message: "Failed to fetch activity." });
   }
 });
-
-router.warmupOllama = warmupOllama;
 
 module.exports = router;

@@ -173,8 +173,7 @@ app.use("/medications", require("./features/medication/routes/medicationRoutes")
 app.use("/vitals", require("./features/vitals/routes/vitalRoutes"));
 app.use("/billing", require("./features/billing/routes/billingRoutes"));
 app.use("/queue", require("./features/queue/routes/queueRoutes"));
-const analyticsRoutes = require("./features/analytics/routes/analyticsRoutes");
-app.use("/analytics", analyticsRoutes);
+app.use("/analytics", require("./features/analytics/routes/analyticsRoutes"));
 app.use("/activity-logs", require("./features/auth/routes/activityLogRoutes"));
 app.use("/inquiries", require("./features/inquiry/routes/inquiryRoutes"));
 app.use("/relatives", require("./features/relative/routes/relativeRoutes"));
@@ -227,9 +226,3 @@ async function runAppointmentSweep() {
 
 setTimeout(runAppointmentSweep, 15 * 1000);
 setInterval(runAppointmentSweep, 60 * 60 * 1000);
-
-// Warm up the local Ollama model after boot so the first AI report doesn't
-// pay the cold-start delay (which previously caused timeouts -> fallback).
-if (typeof analyticsRoutes.warmupOllama === "function") {
-  setTimeout(() => analyticsRoutes.warmupOllama(), 5 * 1000);
-}

@@ -8,8 +8,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-Express_4-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-no_ORM-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![JWT](https://img.shields.io/badge/Auth-JWT_+_bcrypt-000000?logo=jsonwebtokens&logoColor=white)](https://jwt.io/)
-[![Google Gemini](https://img.shields.io/badge/AI-Google_Gemini_OCR-8E75B2?logo=google&logoColor=white)](https://ai.google.dev/)
-[![Ollama](https://img.shields.io/badge/AI-Llama_3.2_via_Ollama-000000?logo=ollama&logoColor=white)](https://ollama.com/)
+[![Google Gemini](https://img.shields.io/badge/AI-Google_Gemini_OCR_+_Reports-8E75B2?logo=google&logoColor=white)](https://ai.google.dev/)
 
 </div>
 
@@ -33,7 +32,7 @@ It is built **from scratch** with no ORM and no UI framework: the data layer is 
 ### AI document intelligence
 - **Prescription & results OCR (Google Gemini)** — uploaded medical documents are parsed into structured data via raw HTTPS calls to the Gemini API.
 - **Doctor medication-approval workflow** — parsed medications are surfaced to a doctor for review and approval before they enter a patient's record.
-- **Self-hosted AI analytics (Llama 3.2 via Ollama)** — locally generated analytics reports with model warm-up on boot, keep-alive, and a built-in fallback generator so reporting still works when the model is unreachable.
+- **AI Reports & Analytics (Google Gemini)** — Gemini writes the admin operations report from the SQL analytics, which stay the source of truth. Only aggregate counts are sent (no patient or clinical details), and a built-in fallback generator keeps reporting working when Gemini is unreachable.
 
 ### Access, security & auditability
 - **Six clinic roles** — Admin, Doctor, Nurse, Frontdesk, Cashier, and Patient — each with a dedicated dashboard and route guards on **both** the frontend and the API.
@@ -54,7 +53,7 @@ It is built **from scratch** with no ORM and no UI framework: the data layer is 
 | **Backend** | Node.js, Express 4, feature-based REST architecture (14 modules), `multer` (uploads) |
 | **Database** | PostgreSQL via the `pg` driver — **no ORM**; hand-written `schema.sql`, `functions.sql`, and versioned SQL migrations |
 | **Auth & Security** | `jsonwebtoken` (with revocation), `bcrypt`, `helmet`, `express-rate-limit`, `cors` |
-| **AI / Integrations** | Google Gemini (document OCR), self-hosted Llama 3.2 via Ollama (analytics), Brevo (transactional email), Cloudinary (media) |
+| **AI / Integrations** | Google Gemini (document OCR + analytics reports), Brevo (transactional email), Cloudinary (media) |
 | **Deployment** | Frontend on **Vercel**, backend + PostgreSQL on **Railway** |
 
 ## Architecture
@@ -84,7 +83,7 @@ QELCare-Website-Multispecialty-Clinic-Management-System//
 │   ├── shared/
 │   │   ├── middleware/         # tokenMiddleware (authenticate + authorize/RBAC)
 │   │   └── utils/              # tokenManager, activityLogger, emailNotifier,
-│   │                           #   queueSweep, passwordHistory
+│   │                           #   queueSweep, passwordHistory, geminiClient
 │   └── server.js               # Express app: headers, rate limits, routes, schedulers
 │
 ├── vercel.json                 # Frontend security headers + SPA rewrites
@@ -99,7 +98,7 @@ A companion **patient-only mobile app** (built with Capacitor) wraps the patient
 ### Prerequisites
 - **Node.js** 18+ and npm
 - **PostgreSQL** 14+
-- *Optional (each degrades gracefully if unset):* a Brevo API key (email), a Cloudinary account (media), a Google Gemini API key (OCR), and a local [Ollama](https://ollama.com/) install running Llama 3.2 (AI analytics).
+- *Optional (each degrades gracefully if unset):* a Brevo API key (email), a Cloudinary account (media), and a Google Gemini API key (OCR and AI analytics reports).
 
 ### 1. Clone and install
 ```bash
@@ -167,7 +166,9 @@ The app is now at **http://localhost:3000**, talking to the API at **http://loca
 | `BREVO_API_KEY` / `BREVO_SENDER_EMAIL` / `BREVO_SENDER_NAME` | Transactional email (OTP delivery) |
 | `EMAIL_DEV_FALLBACK` | `true` prints OTP codes to the server console when email is unconfigured |
 | `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | Media storage |
-| `GEMINI_API_KEY` / `GEMINI_MODEL` | Google Gemini document OCR |
+| `GEMINI_API_KEY` | Google Gemini API key, shared by OCR and AI Reports & Analytics |
+| `GEMINI_MODEL` | Gemini model for document OCR (default `gemini-3.1-flash-lite`) |
+| `GEMINI_REPORTS_MODEL` | Gemini model for Admin AI Reports & Analytics (default `gemini-3.8-flash`) |
 
 > The full annotated templates live in [`.env.example`](.env.example) and [`qelcare-backend/.env.example`](qelcare-backend/.env.example). Never commit real `.env` files.
 
