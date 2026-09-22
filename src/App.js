@@ -152,7 +152,7 @@ export default function App() {
         <Route
           path="/doctor/appointments"
           element={guard(["Doctor", "Admin"], (
-            <MainLayout pageTitle="Appointments" pageSubtitle="Assigned appointments and history">
+            <MainLayout pageTitle="Appointment Management" pageSubtitle="Assigned appointments and history">
               <AppointmentList />
             </MainLayout>
           ))}
@@ -160,7 +160,7 @@ export default function App() {
         <Route
           path="/doctor/records"
           element={guard(["Doctor", "Admin"], (
-            <MainLayout pageTitle="Medical Records" pageSubtitle="Create and review consultation records">
+            <MainLayout pageTitle="Patient Consultation Records" pageSubtitle="Create and review consultation records">
               <MedicalRecords />
             </MainLayout>
           ))}

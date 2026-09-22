@@ -264,7 +264,9 @@ export default function AppointmentList() {
           <div style={{ color: "#42526a", fontSize: 13, lineHeight: 1.45 }}>
             {isPatient
               ? "Bookings are clinic-controlled after submission. Past, completed, cancelled, and no-show appointments move to history without actions."
-              : "Active appointments can be managed by Admin and Frontdesk. Past or finished appointments are read-only history for all roles."}
+              : role === "Doctor"
+                ? "Review your assigned active appointments. Past or finished appointments move to read-only history."
+                : "Active appointments can be managed by Admin and Frontdesk. Past or finished appointments are read-only history for all roles."}
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <TabButton active={view === "active"} onClick={() => setView("active")}>Active</TabButton>

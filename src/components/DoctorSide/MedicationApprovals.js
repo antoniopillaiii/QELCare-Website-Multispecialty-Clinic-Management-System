@@ -84,7 +84,7 @@ export default function MedicationApprovals() {
   const runSearch = () => setQuery(search.trim());
 
   return (
-    <MainLayout pageTitle="Medication Review" pageSubtitle="Validate medications patients submitted before they become active reminders">
+    <MainLayout pageTitle="Patient Medication Review" pageSubtitle="Validate medications patients submitted before they become active reminders">
       <div style={{ display: "grid", gap: 14 }}>
         <Panel style={{ padding: 14 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>

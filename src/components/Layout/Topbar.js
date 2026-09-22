@@ -51,7 +51,7 @@ const PAGE_TITLES = {
   "/admin/appointments": { title: "Appointment Management", sub: "Manage clinic appointment schedules" },
   "/admin/queue": { title: "Queue Management", sub: "Live clinic queue by specialty" },
   "/admin/records": { title: "Medical Records", sub: "Patient documents and history" },
-  "/admin/reports": { title: "Reports & Analytics", sub: "System analytics and reports" },
+  "/admin/reports": { title: "AI Reports & Analytics", sub: "System analytics and reports" },
   "/admin/logs": { title: "Activity Logs", sub: "Recent administrative activity" },
   "/admin/profile": { title: "Profile Settings", sub: "Your account preferences" },
   "/nurse-station": { title: "Nurse Dashboard", sub: "Patient vitals and queue" },
