@@ -120,7 +120,7 @@ export default function App() {
         <Route
           path="/frontdesk/appointments"
           element={guard(["Frontdesk", "Admin"], (
-            <MainLayout pageTitle="Appointments" pageSubtitle="Confirm, reschedule, and cancel active appointments">
+            <MainLayout pageTitle="Appointment Management" pageSubtitle="Confirm, reschedule, and cancel active appointments">
               <AppointmentList />
             </MainLayout>
           ))}

@@ -517,7 +517,7 @@ export default function AdminAppointments() {
 
 
   return (
-    <MainLayout pageTitle="Appointments" pageSubtitle="Manage clinic appointment schedules">
+    <MainLayout>
       {alert && (
         <div style={{
           position: "fixed",

@@ -42,10 +42,14 @@ const RefreshIcon = () => (
 
 const PAGE_TITLES = {
   "/admin/dashboard": { title: "Administrator Dashboard", sub: "Overview & quick actions" },
-  "/admin/users": { title: "Users", sub: "View and control all accounts" },
-  "/admin/patients": { title: "Patients", sub: "Patient records and info" },
-  "/admin/appointments": { title: "Appointments", sub: "Schedule and manage visits" },
-  "/admin/queue": { title: "Queue", sub: "Monitor active queues" },
+  "/admin/users": { title: "User Management", sub: "View and control all accounts" },
+  "/admin/patients": { title: "Patient Management", sub: "Clinical patient records and profile completeness" },
+  // Same AdminPatients component on two routes, so the title is set per route
+  // here rather than by a prop. Without this entry the Frontdesk page would
+  // fall back to "Dashboard".
+  "/frontdesk/patients": { title: "Patient Management", sub: "Patient records and info" },
+  "/admin/appointments": { title: "Appointment Management", sub: "Manage clinic appointment schedules" },
+  "/admin/queue": { title: "Queue Management", sub: "Live clinic queue by specialty" },
   "/admin/records": { title: "Medical Records", sub: "Patient documents and history" },
   "/admin/reports": { title: "Reports & Analytics", sub: "System analytics and reports" },
   "/admin/logs": { title: "Activity Logs", sub: "Recent administrative activity" },
@@ -53,7 +57,7 @@ const PAGE_TITLES = {
   "/nurse-station": { title: "Nurse Dashboard", sub: "Patient vitals and queue" },
   "/doctor/dashboard": { title: "Doctor Dashboard", sub: "Queued patients and consultation records" },
   "/frontdesk/dashboard": { title: "Frontdesk Dashboard", sub: "Confirm appointments and check-ins" },
-  "/frontdesk/appointments": { title: "Appointments", sub: "Confirm, reschedule, and cancel active visits" },
+  "/frontdesk/appointments": { title: "Appointment Management", sub: "Confirm, reschedule, and cancel active visits" },
   "/dashboard": { title: "Patient Dashboard", sub: "Your health overview" },
   "/patient/appointments": { title: "Appointments", sub: "Upcoming visits, history, and booking" },
 };

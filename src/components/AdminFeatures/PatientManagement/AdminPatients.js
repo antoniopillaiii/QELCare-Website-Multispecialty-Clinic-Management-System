@@ -530,7 +530,7 @@ export default function AdminPatients() {
   };
 
   return (
-    <MainLayout pageTitle="Patients" pageSubtitle="Clinical patient records and profile completeness">
+    <MainLayout>
       {alert && (
         <div style={{
           position: "fixed",

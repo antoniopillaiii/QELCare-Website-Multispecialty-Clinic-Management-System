@@ -409,10 +409,7 @@ export default function AdminQueue() {
   const isToday = date === todayISO();
 
   return (
-    <MainLayout
-      pageTitle="Queue"
-      pageSubtitle="Live clinic queue by specialty"
-    >
+    <MainLayout>
       <style>
         {`
           @keyframes qelSpin { to { transform: rotate(360deg); } }
