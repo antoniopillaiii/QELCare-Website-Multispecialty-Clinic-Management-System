@@ -664,7 +664,7 @@ export default function LoginScreen() {
                     checked={rememberMe}
                     onChange={e => setRememberMe(e.target.checked)}
                   />
-                  <span className="ls-remember-label">Remember me</span>
+                  <span className="ls-remember-label">Remember username</span>
                 </label>
                 <button className="ls-link" onClick={() => navigate("/forgot-password")}>
                   Forgot password?
