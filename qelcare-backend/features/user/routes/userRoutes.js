@@ -16,7 +16,6 @@ const {
  getAllUsers,
  getDoctors,
  createUser,
- registerPatientPublic,
  updateUserStatus,
  updateUserRole,
  updateUserDetails,
@@ -53,7 +52,10 @@ async function logProfilePictureUpdate(req, targetUserId, isAdminUpdate) {
  });
 }
 
-router.post("/register", registerPatientPublic);
+// Patient self-registration lives only at /auth/patient/register (email OTP
+// verification + privacy consent + rate limiting). The old public
+// POST /users/register created already-verified accounts without any of that
+// and was unused, so it has been removed.
 
 router.get("/me", authenticate, getProfile);
 router.put("/me", authenticate, updateProfile);

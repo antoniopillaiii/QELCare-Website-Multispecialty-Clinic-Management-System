@@ -12,6 +12,14 @@ const {
   validateOTPCode,
 } = require("../validators/authValidator");
 
+// A permanently locked account can always recover through "Forgot password?":
+// sendOTP allows locked accounts to request a reset code and resetPassword
+// clears the lock. Say so — "contact an administrator" was a dead end when the
+// locked account IS the only administrator. (Keeps "permanently locked", which
+// the web and mobile sign-in screens use to show the lock state.)
+const PERMANENT_LOCK_MESSAGE =
+  'Account is permanently locked. Use "Forgot password?" to reset your password and unlock it, or contact an administrator.';
+
 const login = async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -78,7 +86,7 @@ const login = async (req, res) => {
     if (user.status === "locked" && !user.lockout_until) {
       return res.status(403).json({
         success: false,
-        message: "Account is permanently locked. Please contact an administrator.",
+        message: PERMANENT_LOCK_MESSAGE,
       });
     }
 
@@ -113,7 +121,7 @@ const login = async (req, res) => {
         });
         return res.status(403).json({
           success: false,
-          message: "Account permanently locked. Contact an administrator.",
+          message: PERMANENT_LOCK_MESSAGE,
         });
       }
 

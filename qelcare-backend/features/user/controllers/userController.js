@@ -322,85 +322,6 @@ const createUser = async (req, res) => {
  }
 };
 
-const registerPatientPublic = async (req, res) => {
- try {
- const username = String(req.body.username || "").trim().toLowerCase();
- const email = String(req.body.email || "").trim().toLowerCase();
- const password = String(req.body.password || "");
- const first_name = String(req.body.first_name || "").trim();
- const last_name = String(req.body.last_name || "").trim();
- const date_of_birth = req.body.date_of_birth || null;
- const phone = req.body.phone ? String(req.body.phone).trim() : null;
- const gender = req.body.gender || null;
-
- if (!username || !email || !password || !first_name || !last_name) {
- return res.status(400).json({
- success: false,
- message: "Username, email, password, first name, and last name are required",
- });
- }
-
- if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
- return res.status(400).json({ success: false, message: "Invalid email address" });
- }
-
- if (!/^[a-zA-Z][a-zA-Z0-9_.-]{2,29}$/.test(username)) {
- return res.status(400).json({
- success: false,
- message: "Username must start with a letter and use 3-30 letters, numbers, underscore, dot, or dash characters",
- });
- }
-
- if (password.length < 8) {
- return res.status(400).json({ success: false, message: "Password must be at least 8 characters" });
- }
-
- if (!VALID_GENDERS.includes(gender)) {
- return res.status(400).json({ success: false, message: "Invalid gender" });
- }
-
- const created = await User.registerPatientAccount({
- username,
- email,
- password,
- first_name,
- last_name,
- date_of_birth,
- phone,
- gender,
- });
-
- await logger.log({
- userId: null,
- action: "PATIENT_SELF_REGISTERED",
- entityType: "user",
- entityId: created.user.user_id,
- description: `Patient self-registered: ${displayName(created.user)}.`,
- ip: logger.getIP(req),
- metadata: {
- user_id: created.user.user_id,
- patient_id: created.patient.id,
- email: created.user.email,
- },
- }).catch((logError) => {
- console.error("patient registration log error:", logError);
- });
-
- res.status(201).json({
- success: true,
- message: "Patient account created successfully",
- data: created.user,
- patient: created.patient,
- });
- } catch (error) {
- console.error("registerPatientPublic error:", error);
- res.status(error.status || 500).json({
- success: false,
- message: error.status ? error.message : "Failed to register patient account",
- });
- }
-};
-
 const updateUserStatus = async (req, res) => {
  try {
  const { userId } = req.params;
@@ -561,7 +482,6 @@ module.exports = {
  getAllUsers,
  getDoctors,
  createUser,
- registerPatientPublic,
  updateUserStatus,
  updateUserRole,
  updateUserDetails,

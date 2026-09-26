@@ -27,7 +27,10 @@ const RANGE_CONFIG = {
 };
 
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-const EXCLUDED_APPOINTMENT_STATUSES = ["CANCELLED", "NO_SHOW", "RESCHEDULED"];
+// Lost visits, left out of the department-demand and by-day figures. Same rule
+// as the Admin Dashboard ("Appointments Today", 7-day chart, Department Load):
+// RESCHEDULED is an active pre-visit status in the appointment model, so it counts.
+const EXCLUDED_APPOINTMENT_STATUSES = ["CANCELLED", "NO_SHOW"];
 
 function toDateOnly(date) {
   const year = date.getFullYear();

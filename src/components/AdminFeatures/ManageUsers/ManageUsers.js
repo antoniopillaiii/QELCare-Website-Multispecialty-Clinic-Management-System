@@ -541,7 +541,7 @@ function UserModal({ user, roles, specialties, mode, onClose, onSave, saving }) 
                   </Field>
                 )}
                 {!isEdit && (
-                  <Field label="Temporary Password">
+                  <Field label="Initial Password">
                     <input name="password" type="password" value={form.password} onChange={handleChange} style={inputStyle} />
                     <div style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>{PASSWORD_HINT}</div>
                   </Field>
