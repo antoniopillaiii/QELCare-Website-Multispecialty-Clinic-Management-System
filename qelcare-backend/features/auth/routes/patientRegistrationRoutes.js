@@ -89,11 +89,13 @@ const dns = require("dns").promises;
 // Names: letters (incl. accents), spaces, hyphen, apostrophe, period only.
 const NAME_REGEX = /^[A-Za-zÀ-ÿ.'\- ]+$/;
 
-// Capitalize the first letter of every word so "kelly celocia" is always stored
-// as "Kelly Celocia" no matter how it was typed.
+// Capitalize the first letter of every word so "kelly celocia" is stored as
+// "Kelly Celocia" and an ALL-CAPS "JUAN" as "Juan", but keep intentional mixed
+// case such as "McArthur" or "DeLeon" exactly as typed. Mirrors formatName() on
+// the Sign Up screen (web + mobile).
 function toTitleCase(value) {
   return clean(value)
-    .toLowerCase()
+    .replace(/[A-Za-zÀ-ÿ]+/g, (word) => (word.length > 1 && word === word.toUpperCase() ? word.toLowerCase() : word))
     .replace(/(^|[\s'-])([a-zà-ÿ])/g, (_m, sep, ch) => sep + ch.toUpperCase());
 }
 
@@ -155,7 +157,8 @@ function validateRegistration(body) {
   if (!dateOfBirth) errors.push("Date of birth is required.");
 
   const age = calcAge(dateOfBirth);
-  if (dateOfBirth && (age === null || age < 1 || age > 120)) errors.push("Please enter a valid date of birth.");
+  if (dateOfBirth && (age === null || age < 0 || age > 120)) errors.push("Please enter a valid date of birth.");
+  else if (dateOfBirth && age < 1) errors.push("Date of birth must be at least 1 year ago.");
   if (phone && !validPhone(phone)) errors.push("Invalid phone number. Use 09XXXXXXXXX or +639XXXXXXXXX format.");
 
   if (!email || !isEmail(email)) errors.push("A valid email is required.");
@@ -209,12 +212,25 @@ router.post("/register", async (req, res) => {
     const patientRoleId = await getPatientRoleId(client);
 
     const duplicate = await client.query(
-      "SELECT user_id FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($2)",
+      `SELECT LOWER(username) = LOWER($1) AS username_taken, LOWER(email) = LOWER($2) AS email_taken
+         FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($2)`,
       [data.username, data.email]
     );
     if (duplicate.rows.length > 0) {
       await client.query("ROLLBACK");
-      return res.status(409).json({ success: false, code: "DUPLICATE", message: "Username or email already exists." });
+      // Name the taken field(s) so Sign Up can send the patient back to the
+      // right step. (Saying "already exists" at all reveals as much, so naming
+      // the field adds no enumeration risk.)
+      const fields = [
+        ...(duplicate.rows.some((row) => row.username_taken) ? ["username"] : []),
+        ...(duplicate.rows.some((row) => row.email_taken) ? ["email"] : []),
+      ];
+      const message = fields.length === 2
+        ? "That username and email are already registered."
+        : fields[0] === "email"
+          ? "An account with this email already exists. Sign in instead, or use a different email."
+          : "That username is already taken. Please choose another.";
+      return res.status(409).json({ success: false, code: "DUPLICATE", field: fields[0], fields, message });
     }
 
     const hashedPassword = await bcrypt.hash(data.password, 12);

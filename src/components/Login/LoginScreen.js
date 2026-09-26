@@ -19,6 +19,7 @@ import {
   MessageSquareText as InquiryIcon,
   Send as SendIcon,
   X as CloseIcon,
+  Info as InfoIcon,
 } from "lucide-react";
 
 const ROLE_REDIRECT = {
@@ -37,7 +38,8 @@ const FEATURES = [
 ];
 
 // """ Lockout Countdown """"""""""""""""""""""""""""""""""""""""""""""""""""""""
-function LockoutCountdown({ until, onExpired }) {
+// Display only — LoginScreen owns the timer that actually unlocks the form.
+function LockoutCountdown({ until }) {
   const [remaining, setRemaining] = useState(0);
 
   useEffect(() => {
@@ -46,10 +48,10 @@ function LockoutCountdown({ until, onExpired }) {
     const id = setInterval(() => {
       const r = calc();
       setRemaining(r);
-      if (r === 0) { clearInterval(id); onExpired?.(); }
+      if (r === 0) clearInterval(id);
     }, 1000);
     return () => clearInterval(id);
-  }, [until, onExpired]);
+  }, [until]);
 
   const m = Math.floor(remaining / 60);
   const s = remaining % 60;
@@ -188,6 +190,7 @@ const styles = `
   .ls-alert-success { background: #f0fdf4; border: 1px solid #bbf7d0; color: #15803d; }
   .ls-alert-warn    { background: var(--warn-bg); border: 1px solid var(--warn-bd); color: var(--warn); }
   .ls-alert-lock    { background: #faf5ff; border: 1px solid #ddd6fe; color: #6d28d9; }
+  .ls-alert-info    { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e4d8c; }
 
   /* Attempts bar */
   .ls-attempts { margin-top: -6px; margin-bottom: 10px; }
@@ -286,20 +289,25 @@ const styles = `
 
 const inqInputStyle = { width: "100%", boxSizing: "border-box", border: "1.5px solid #e5eaf3", borderRadius: 10, padding: "9px 11px", fontSize: 14, fontFamily: "inherit", color: "#162235", background: "#fafbfd" };
 
-function Inq({ label, value, onChange, type = "text" }) {
+function Inq({ label, value, onChange, type = "text", maxLength, autoFocus = false }) {
   return (
     <label style={{ display: "grid", gap: 5, fontSize: 12, fontWeight: 800, color: "#42526a" }}>
       {label}
-      <input className="ls-inq-input" type={type} value={value} onChange={e => onChange(e.target.value)} style={inqInputStyle} />
+      <input className="ls-inq-input" type={type} value={value} onChange={e => onChange(e.target.value)} maxLength={maxLength} autoFocus={autoFocus} style={inqInputStyle} />
     </label>
   );
 }
 
 const EMPTY_INQUIRY = { full_name: "", email: "", phone: "", subject: "", message: "", preferred_date: "" };
+// Same limits and email rule the backend enforces (inquiryController), so the
+// form never accepts text the server would silently cut off or reject.
+const INQ_MAX = { full_name: 120, email: 150, phone: 30, subject: 150, message: 2000 };
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function LoginScreen() {
   const navigate = useNavigate();
   const usernameRef = useRef(null);
+  const passwordRef = useRef(null);
 
   const [showInquiry, setShowInquiry] = useState(false);
   const [inq, setInq] = useState(EMPTY_INQUIRY);
@@ -313,6 +321,8 @@ export default function LoginScreen() {
   const [rememberMe,   setRememberMe]   = useState(false);
   const [error,        setError]        = useState("");
   const [errorType,    setErrorType]    = useState("error"); // "error" | "warn" | "lock"
+  const [errorField,   setErrorField]   = useState(null);    // "username" | "password" | null
+  const [notice,       setNotice]       = useState("");
   const [success,      setSuccess]      = useState("");
   const [loading,      setLoading]      = useState(false);
   const [attemptsLeft, setAttemptsLeft] = useState(null); // 1-4 = warning
@@ -341,12 +351,35 @@ export default function LoginScreen() {
     return () => window.removeEventListener("keydown", onKey);
   }, [showInquiry]);
 
-  const clearFeedback = () => { setError(""); setErrorType("error"); setAttemptsLeft(null); };
+  // Unlock the form when the lockout ends. This lives here rather than in the
+  // countdown, so editing a field (which used to clear the alert and its timer)
+  // can never leave the form locked after the lockout has expired.
+  useEffect(() => {
+    if (!lockoutUntil) return undefined;
+    const unlock = () => {
+      setIsLocked(false);
+      setLockoutUntil(null);
+      setError("");
+      setErrorType("error");
+      setAttemptsLeft(null);
+    };
+    const remaining = new Date(lockoutUntil).getTime() - Date.now();
+    if (!(remaining > 0)) { unlock(); return undefined; }
+    const id = setTimeout(unlock, remaining);
+    return () => clearTimeout(id);
+  }, [lockoutUntil]);
+
+  // While locked, keep the lockout alert and its countdown on screen.
+  const clearFeedback = () => {
+    setNotice("");
+    if (isLocked) return;
+    setError(""); setErrorType("error"); setErrorField(null); setAttemptsLeft(null);
+  };
 
   const handleLogin = async () => {
     if (loading) return;
-    if (!username.trim()) { setError("Please enter your username."); setErrorType("error"); return; }
-    if (!password.trim()) { setError("Please enter your password."); setErrorType("error"); return; }
+    if (!username.trim()) { setNotice(""); setError("Please enter your username."); setErrorType("error"); setErrorField("username"); return; }
+    if (!password.trim()) { setNotice(""); setError("Please enter your password."); setErrorType("error"); setErrorField("password"); return; }
     if (isLocked) return;
 
     setLoading(true); clearFeedback(); setSuccess("");
@@ -421,12 +454,20 @@ export default function LoginScreen() {
   };
 
   const handleKey = (e) => { if (e.key === "Enter") handleLogin(); };
-  const focusUsername = () => usernameRef.current?.focus();
+
+  // "Existing Patient" is a shortcut into the sign-in form above (returning
+  // patients sign in here). Say so, and put the cursor where they type next.
+  const startExistingPatient = () => {
+    clearFeedback();
+    setNotice("Welcome back! Sign in with your username and password.");
+    (username.trim() ? passwordRef : usernameRef).current?.focus();
+  };
 
   const submitInquiry = async () => {
     setInqErr(""); setInqMsg("");
     if (!inq.full_name.trim() || !inq.message.trim()) { setInqErr("Please enter your name and a message."); return; }
     if (!inq.email.trim() && !inq.phone.trim()) { setInqErr("Please provide an email or phone so the clinic can reach you."); return; }
+    if (inq.email.trim() && !EMAIL_REGEX.test(inq.email.trim())) { setInqErr("Please enter a valid email address."); return; }
     setInqBusy(true);
     try {
       const res = await fetch(`${API_URL}/inquiries`, {
@@ -434,12 +475,16 @@ export default function LoginScreen() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(inq),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Failed to send inquiry.");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setInqErr(data.message || "Failed to send inquiry. Please try again.");
+        return;
+      }
       setInqMsg(data.message || "Your inquiry has been sent.");
       setInq(EMPTY_INQUIRY);
-    } catch (e) {
-      setInqErr(e.message || "Cannot connect to server.");
+    } catch {
+      // fetch only throws when the server can't be reached.
+      setInqErr("Cannot connect to server. Please try again.");
     } finally {
       setInqBusy(false);
     }
@@ -530,13 +575,15 @@ export default function LoginScreen() {
                     {error}
                     {errorType === "lock" && lockoutUntil && (
                       <> &mdash; unlocks in{" "}
-                        <LockoutCountdown
-                          until={lockoutUntil}
-                          onExpired={() => { setIsLocked(false); setLockoutUntil(null); clearFeedback(); }}
-                        />
+                        <LockoutCountdown until={lockoutUntil} />
                       </>
                     )}
                   </span>
+                </div>
+              )}
+              {notice && !error && !success && (
+                <div className="ls-alert ls-alert-info" role="status" aria-live="polite">
+                  <InfoIcon />{notice}
                 </div>
               )}
               {success && (
@@ -565,7 +612,8 @@ export default function LoginScreen() {
                   <input
                     id="qelcare-username"
                     ref={usernameRef}
-                    className={`ls-input${error && errorType === "error" && !password ? " ls-input-error" : ""}`}
+                    className={`ls-input${errorField === "username" ? " ls-input-error" : ""}`}
+                    aria-invalid={errorField === "username"}
                     type="text"
                     placeholder="Enter your username"
                     value={username}
@@ -585,7 +633,9 @@ export default function LoginScreen() {
                   <span className="ls-input-icon"><LockIcon /></span>
                   <input
                     id="qelcare-password"
-                    className="ls-input ls-input-pr"
+                    ref={passwordRef}
+                    className={`ls-input ls-input-pr${errorField === "password" ? " ls-input-error" : ""}`}
+                    aria-invalid={errorField === "password"}
                     type={showPass ? "text" : "password"}
                     placeholder="Enter your password"
                     value={password}
@@ -641,7 +691,7 @@ export default function LoginScreen() {
                   <button className="ls-patient-btn" onClick={() => navigate("/register")}>
                     <UserPlusIcon />New Patient
                   </button>
-                  <button className="ls-patient-btn" onClick={focusUsername}>
+                  <button className="ls-patient-btn" onClick={startExistingPatient}>
                     <UserIcon />Existing Patient
                   </button>
                 </div>
@@ -664,7 +714,7 @@ export default function LoginScreen() {
 
       {showInquiry && (
         <div onClick={() => setShowInquiry(false)} style={{ position: "fixed", inset: 0, background: "rgba(8,18,33,.5)", display: "grid", placeItems: "center", padding: 16, zIndex: 100 }}>
-          <div role="dialog" aria-modal="true" aria-labelledby="ls-inq-title" onClick={e => e.stopPropagation()} style={{ width: "min(520px, 96vw)", maxHeight: "90vh", overflowY: "auto", background: "#fff", borderRadius: 16, boxShadow: "0 24px 64px rgba(14,35,64,.28)", fontFamily: "inherit" }}>
+          <div role="dialog" aria-modal="true" aria-labelledby="ls-inq-title" onClick={e => e.stopPropagation()} style={{ width: "min(520px, 100%)", maxHeight: "90vh", overflowY: "auto", background: "#fff", borderRadius: 16, boxShadow: "0 24px 64px rgba(14,35,64,.28)", fontFamily: "inherit" }}>
             <div style={{ position: "sticky", top: 0, background: "#fff", borderBottom: "1px solid #e8eef6", padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
               <h3 id="ls-inq-title" style={{ margin: 0, fontSize: 18, fontWeight: 900, color: "#0e2340", display: "flex", alignItems: "center", gap: 9 }}>
                 <span style={{ width: 32, height: 32, borderRadius: 9, background: "#eef4fb", color: "#163a6b", display: "grid", placeItems: "center", flexShrink: 0 }}><InquiryIcon size={17} /></span>
@@ -684,18 +734,18 @@ export default function LoginScreen() {
                 </>
               ) : (
                 <>
-                  <Inq label="Full name *" value={inq.full_name} onChange={v => setInq(s => ({ ...s, full_name: v }))} />
+                  <Inq label="Full name *" value={inq.full_name} onChange={v => setInq(s => ({ ...s, full_name: v }))} maxLength={INQ_MAX.full_name} autoFocus />
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <Inq label="Email" type="email" value={inq.email} onChange={v => setInq(s => ({ ...s, email: v }))} />
-                    <Inq label="Phone" value={inq.phone} onChange={v => setInq(s => ({ ...s, phone: v }))} />
+                    <Inq label="Email" type="email" value={inq.email} onChange={v => setInq(s => ({ ...s, email: v }))} maxLength={INQ_MAX.email} />
+                    <Inq label="Phone" value={inq.phone} onChange={v => setInq(s => ({ ...s, phone: v }))} maxLength={INQ_MAX.phone} />
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: 10 }}>
-                    <Inq label="Subject" value={inq.subject} onChange={v => setInq(s => ({ ...s, subject: v }))} />
+                    <Inq label="Subject" value={inq.subject} onChange={v => setInq(s => ({ ...s, subject: v }))} maxLength={INQ_MAX.subject} />
                     <Inq label="Preferred date" type="date" value={inq.preferred_date} onChange={v => setInq(s => ({ ...s, preferred_date: v }))} />
                   </div>
                   <label style={{ display: "grid", gap: 5, fontSize: 12, fontWeight: 800, color: "#42526a" }}>
                     Message *
-                    <textarea className="ls-inq-input" value={inq.message} onChange={e => setInq(s => ({ ...s, message: e.target.value }))} rows={4} style={inqInputStyle} placeholder="How can the clinic help you?" />
+                    <textarea className="ls-inq-input" value={inq.message} onChange={e => setInq(s => ({ ...s, message: e.target.value }))} rows={4} maxLength={INQ_MAX.message} style={inqInputStyle} placeholder="How can the clinic help you?" />
                   </label>
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
                     <button onClick={() => setShowInquiry(false)} style={{ border: "1px solid #cddbeb", background: "#fff", color: "#163a6b", borderRadius: 10, padding: "10px 16px", fontWeight: 800, cursor: "pointer" }}>Close</button>

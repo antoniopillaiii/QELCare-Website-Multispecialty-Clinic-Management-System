@@ -86,6 +86,20 @@ const usernameHint   = (u) => {
   return null; // valid
 };
 
+// --- Name formatting ----------------------------------------------------------
+// Only letters (incl. accents), spaces, period, apostrophe and hyphen are kept.
+const NAME_CHARS = /[^A-Za-zÀ-ÿ.'\- ]/g;
+// While typing: capitalize the first letter of each word and keep the rest as
+// typed, so intentional capitals such as "McArthur" survive.
+const liveName = (value) => value
+  .replace(NAME_CHARS, "")
+  .replace(/(^|[\s'-])([a-zà-ÿ])/g, (_m, sep, ch) => sep + ch.toUpperCase());
+// Final form (on blur / before saving): an ALL-CAPS word such as "JUAN" becomes
+// "Juan"; mixed case is left alone. Mirrors the backend's toTitleCase().
+const formatName = (value) => liveName(
+  value.replace(/[A-Za-zÀ-ÿ]+/g, (word) => (word.length > 1 && word === word.toUpperCase() ? word.toLowerCase() : word))
+);
+
 // --- Styles -------------------------------------------------------------------
 const styles = `
   :root {
@@ -329,6 +343,7 @@ export default function RegisterScreen() {
   const [showCPw,   setShowCPw]   = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [legalView, setLegalView] = useState(null); // "privacy" | "terms" | null
+  const [fieldErrors, setFieldErrors] = useState([]); // fields the server rejected, e.g. ["username"]
 
   // Let keyboard users dismiss the legal modal with Escape.
   useEffect(() => {
@@ -338,21 +353,21 @@ export default function RegisterScreen() {
     return () => window.removeEventListener("keydown", onKey);
   }, [legalView]);
 
-  // Name fields are normalized live: invalid characters are blocked and each word
-  // is auto-capitalized ("kelly celocia" -> "Kelly Celocia") as the user types,
-  // matching what the backend stores.
+  // Name fields are normalized as the user types: invalid characters are blocked
+  // and each word is auto-capitalized ("kelly celocia" -> "Kelly Celocia"). On
+  // blur, ALL-CAPS words are tidied ("JUAN" -> "Juan"), matching what the backend
+  // stores, while intentional mixed case ("McArthur") is kept.
   const NAME_FIELDS = ["first_name", "last_name", "middle_name"];
   const handle = e => {
     const { name, value } = e.target;
-    let v = value;
-    if (NAME_FIELDS.includes(name)) {
-      v = value
-        .replace(/[^A-Za-zÀ-ÿ.'\- ]/g, "")
-        .toLowerCase()
-        .replace(/(^|[\s'-])([a-zà-ÿ])/g, (_m, sep, ch) => sep + ch.toUpperCase());
-    }
+    const v = NAME_FIELDS.includes(name) ? liveName(value) : value;
     setForm(p => ({ ...p, [name]: v }));
     setError("");
+    setFieldErrors(f => f.filter(field => field !== name));
+  };
+  const handleNameBlur = e => {
+    const { name } = e.target;
+    setForm(p => ({ ...p, [name]: formatName(p[name]) }));
   };
 
   // -- Per-step validation ---------------------------------------------------
@@ -364,8 +379,8 @@ export default function RegisterScreen() {
       if (form.last_name.trim().length < 2)  return "Last name must be at least 2 characters.";
       if (!form.date_of_birth)     return "Date of birth is required.";
       const age = calcAge(form.date_of_birth);
-      if (age < 1)  return "Please enter a valid date of birth.";
-      if (age > 120) return "Please enter a valid date of birth.";
+      if (!Number.isFinite(age) || age < 0 || age > 120) return "Please enter a valid date of birth.";
+      if (age < 1) return "Date of birth must be at least 1 year ago.";
       if (form.phone && !isValidPhone(form.phone)) {
         return "Invalid phone number. Use 09XXXXXXXXX or +639XXXXXXXXX format.";
       }
@@ -382,7 +397,7 @@ export default function RegisterScreen() {
       if (!pwValid(form.password)) return "Password does not meet all requirements.";
       if (!form.confirm)  return "Please confirm your password.";
       if (form.password !== form.confirm) return "Passwords do not match.";
-      if (!agreedToTerms) return "You must agree to the Terms of Service to register.";
+      if (!agreedToTerms) return "Please agree to the Terms of Service and Data Privacy Statement to sign up.";
     }
     return null;
   };
@@ -391,9 +406,20 @@ export default function RegisterScreen() {
     const e = validate(step);
     if (e) return setError(e);
     setError("");
+    if (step === 1) {
+      setForm(p => ({ ...p, first_name: formatName(p.first_name), last_name: formatName(p.last_name) }));
+    }
     setStep(s => s + 1);
   };
   const back = () => { setStep(s => s - 1); setError(""); };
+
+  // Enter on steps 1-2 continues to the next step, like the Continue button
+  // (step 3's Enter already submits the form).
+  const handleFormKeyDown = (e) => {
+    if (e.key !== "Enter" || step === 3 || e.target.tagName !== "INPUT") return;
+    e.preventDefault();
+    next();
+  };
 
   const handleSubmit = async (ev) => {
     ev.preventDefault();
@@ -402,8 +428,8 @@ export default function RegisterScreen() {
     setLoading(true); setError("");
     try {
       const payload = {
-        first_name:    form.first_name.trim(),
-        last_name:     form.last_name.trim(),
+        first_name:    formatName(form.first_name).trim(),
+        last_name:     formatName(form.last_name).trim(),
         date_of_birth: form.date_of_birth,
         email:         form.email.trim().toLowerCase(),
         username:      form.username.trim().toLowerCase(),
@@ -418,7 +444,19 @@ export default function RegisterScreen() {
         body: JSON.stringify(payload),
       });
       const data = await res.json();
-      if (!res.ok) return setError(data.message || "Registration failed. Please try again.");
+      if (!res.ok) {
+        // A taken username/email or an undeliverable email can only be caught by
+        // the server. Send the patient back to Account Setup with the field(s)
+        // to fix marked, instead of leaving them on the Password step.
+        const accountFields = data.code === "DUPLICATE"
+          ? (Array.isArray(data.fields) && data.fields.length ? data.fields : ["username", "email"])
+          : data.code === "EMAIL_UNDELIVERABLE" ? ["email"] : [];
+        if (accountFields.length) {
+          setFieldErrors(accountFields);
+          setStep(2);
+        }
+        return setError(data.message || "Registration failed. Please try again.");
+      }
       sessionStorage.setItem("otp_email", payload.email);
       sessionStorage.setItem("otp_flow", "registration");
       sessionStorage.removeItem("otp_code");
@@ -517,19 +555,21 @@ export default function RegisterScreen() {
               {error   && <div className="rg-alert rg-alert-error" role="alert"><AlertIcon />{error}</div>}
               {success && <div className="rg-alert rg-alert-success" role="status"><CheckIcon />{success}</div>}
 
-              <form onSubmit={handleSubmit} noValidate>
+              <form onSubmit={handleSubmit} onKeyDown={handleFormKeyDown} noValidate>
 
                 {/* -- Step 1: Personal Info -- */}
                 {step === 1 && <>
                   <div className="rg-field-row">
                     <div className="rg-field">
-                      <label className="rg-label">First Name</label>
+                      <label className="rg-label" htmlFor="rg-first-name">First Name</label>
                       <div className="rg-input-wrap">
                         <input
+                          id="rg-first-name"
                           className="rg-input rg-input-no-icon"
                           name="first_name"
                           value={form.first_name}
                           onChange={handle}
+                          onBlur={handleNameBlur}
                           placeholder="Juan"
                           maxLength={50}
                           autoComplete="given-name"
@@ -537,14 +577,16 @@ export default function RegisterScreen() {
                       </div>
                     </div>
                     <div className="rg-field">
-                      <label className="rg-label">Last Name</label>
+                      <label className="rg-label" htmlFor="rg-last-name">Last Name</label>
                       <div className="rg-input-wrap">
                         <input
+                          id="rg-last-name"
                           className="rg-input rg-input-no-icon"
                           name="last_name"
                           value={form.last_name}
                           onChange={handle}
-                          placeholder="dela Cruz"
+                          onBlur={handleNameBlur}
+                          placeholder="Dela Cruz"
                           maxLength={50}
                           autoComplete="family-name"
                         />
@@ -553,12 +595,13 @@ export default function RegisterScreen() {
                   </div>
 
                   <div className="rg-field">
-                    <label className="rg-label">
+                    <label className="rg-label" htmlFor="rg-dob">
                       Date of Birth
                     </label>
                     <div className="rg-input-wrap">
                       <span className="rg-input-icon"><CalendarIcon /></span>
                       <input
+                        id="rg-dob"
                         className="rg-input"
                         type="date"
                         name="date_of_birth"
@@ -575,13 +618,15 @@ export default function RegisterScreen() {
                   </div>
 
                   <div className="rg-field">
-                    <label className="rg-label">
+                    <label className="rg-label" htmlFor="rg-phone">
                       Phone Number <span className="rg-label-opt">(optional)</span>
                     </label>
                     <div className="rg-input-wrap">
                       <span className="rg-input-icon"><PhoneIcon /></span>
                       <input
+                        id="rg-phone"
                         className={`rg-input${form.phone && !isValidPhone(form.phone) ? " rg-input-error" : ""}`}
+                        aria-invalid={Boolean(form.phone) && !isValidPhone(form.phone)}
                         name="phone"
                         value={form.phone}
                         onChange={handle}
@@ -600,11 +645,13 @@ export default function RegisterScreen() {
                 {/* -- Step 2: Account Setup -- */}
                 {step === 2 && <>
                   <div className="rg-field">
-                    <label className="rg-label">Email Address</label>
+                    <label className="rg-label" htmlFor="rg-email">Email Address</label>
                     <div className="rg-input-wrap">
                       <span className="rg-input-icon"><MailIcon /></span>
                       <input
-                        className="rg-input"
+                        id="rg-email"
+                        className={`rg-input${fieldErrors.includes("email") ? " rg-input-error" : ""}`}
+                        aria-invalid={fieldErrors.includes("email")}
                         type="email"
                         name="email"
                         value={form.email}
@@ -619,11 +666,13 @@ export default function RegisterScreen() {
                   </div>
 
                   <div className="rg-field">
-                    <label className="rg-label">Username</label>
+                    <label className="rg-label" htmlFor="rg-username">Username</label>
                     <div className="rg-input-wrap">
                       <span className="rg-input-icon"><UserIcon /></span>
                       <input
-                        className={`rg-input${uHint && form.username ? " rg-input-error" : ""}`}
+                        id="rg-username"
+                        className={`rg-input${(uHint && form.username) || fieldErrors.includes("username") ? " rg-input-error" : ""}`}
+                        aria-invalid={Boolean(uHint && form.username) || fieldErrors.includes("username")}
                         name="username"
                         value={form.username}
                         onChange={handle}
@@ -649,10 +698,11 @@ export default function RegisterScreen() {
                 {/* -- Step 3: Password -- */}
                 {step === 3 && <>
                   <div className="rg-field">
-                    <label className="rg-label">Password</label>
+                    <label className="rg-label" htmlFor="rg-password">Password</label>
                     <div className="rg-pw-wrap">
                       <span className="rg-input-icon" style={{zIndex:1}}><LockIcon /></span>
                       <input
+                        id="rg-password"
                         className="rg-input"
                         type={showPw ? "text" : "password"}
                         name="password"
@@ -662,7 +712,7 @@ export default function RegisterScreen() {
                         maxLength={128}
                         autoComplete="new-password"
                       />
-                      <button type="button" className="rg-eye" onClick={() => setShowPw(v => !v)} aria-label={showPw ? "Hide" : "Show"}>
+                      <button type="button" className="rg-eye" onClick={() => setShowPw(v => !v)} aria-label={showPw ? "Hide password" : "Show password"}>
                         {showPw ? <EyeClosed /> : <EyeOpen />}
                       </button>
                     </div>
@@ -682,11 +732,13 @@ export default function RegisterScreen() {
                   </div>
 
                   <div className="rg-field">
-                    <label className="rg-label">Confirm Password</label>
+                    <label className="rg-label" htmlFor="rg-confirm">Confirm Password</label>
                     <div className="rg-pw-wrap">
                       <span className="rg-input-icon" style={{zIndex:1}}><LockIcon /></span>
                       <input
+                        id="rg-confirm"
                         className={`rg-input${confirmMismatch ? " rg-input-error" : ""}`}
+                        aria-invalid={Boolean(confirmMismatch)}
                         type={showCPw ? "text" : "password"}
                         name="confirm"
                         value={form.confirm}
@@ -695,7 +747,7 @@ export default function RegisterScreen() {
                         maxLength={128}
                         autoComplete="new-password"
                       />
-                      <button type="button" className="rg-eye" onClick={() => setShowCPw(v => !v)} aria-label={showCPw ? "Hide" : "Show"}>
+                      <button type="button" className="rg-eye" onClick={() => setShowCPw(v => !v)} aria-label={showCPw ? "Hide confirmed password" : "Show confirmed password"}>
                         {showCPw ? <EyeClosed /> : <EyeOpen />}
                       </button>
                     </div>
@@ -781,7 +833,7 @@ export default function RegisterScreen() {
             aria-modal="true"
             aria-labelledby="rg-legal-title"
             onClick={e => e.stopPropagation()}
-            style={{ width: "min(560px, 96vw)", maxHeight: "86vh", overflowY: "auto", background: "#fff", borderRadius: 16, boxShadow: "0 24px 64px rgba(14,35,64,.28)", fontFamily: "inherit" }}
+            style={{ width: "min(560px, 100%)", maxHeight: "86vh", overflowY: "auto", background: "#fff", borderRadius: 16, boxShadow: "0 24px 64px rgba(14,35,64,.28)", fontFamily: "inherit" }}
           >
             <div style={{ position: "sticky", top: 0, background: "#fff", borderBottom: "1px solid #e8eef6", padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
               <h3 id="rg-legal-title" style={{ margin: 0, fontSize: 18, fontWeight: 900, color: "#0e2340", display: "flex", alignItems: "center", gap: 9 }}>
@@ -792,6 +844,7 @@ export default function RegisterScreen() {
                 type="button"
                 onClick={() => setLegalView(null)}
                 aria-label="Close"
+                autoFocus
                 style={{ border: 0, background: "#eef4fb", color: "#163a6b", width: 34, height: 34, borderRadius: 10, cursor: "pointer", display: "grid", placeItems: "center", flexShrink: 0 }}
               >
                 <CloseIcon size={18} />
@@ -805,13 +858,16 @@ export default function RegisterScreen() {
                   <div style={{ color: "#5a6a7e", fontSize: 13.5, lineHeight: 1.6 }}>{body}</div>
                 </div>
               ))}
+              {/* Reading one document must not tick the combined "Terms of Service
+                  and Data Privacy Statement" box — consent is given only by the
+                  patient ticking that checkbox themselves. */}
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
                 <button
                   type="button"
-                  onClick={() => { setAgreedToTerms(true); setLegalView(null); setError(""); }}
+                  onClick={() => setLegalView(null)}
                   style={{ border: 0, borderRadius: 10, padding: "10px 16px", background: "#163a6b", color: "#fff", fontWeight: 800, fontSize: 14, cursor: "pointer" }}
                 >
-                  I Understand &amp; Agree
+                  Close
                 </button>
               </div>
             </div>
