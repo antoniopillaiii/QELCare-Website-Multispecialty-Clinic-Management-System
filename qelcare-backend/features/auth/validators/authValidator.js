@@ -49,6 +49,31 @@ const validateEmail = (email) => {
   return errors;
 };
 
+// Same rules patient self-registration enforces (patientRegistrationRoutes.js):
+// a username starts with a letter and uses 3-50 letters, numbers, dot,
+// underscore or hyphen; a name is 2+ characters of letters (incl. accents),
+// spaces, hyphens, apostrophes and periods.
+const USERNAME_REGEX = /^[a-zA-Z][a-zA-Z0-9._-]{2,49}$/;
+const NAME_REGEX = /^[A-Za-zÀ-ÿ.'\- ]+$/;
+
+const validateUsername = (username) => {
+  const value = clean(username);
+  if (!value) return ["Username is required"];
+  if (!USERNAME_REGEX.test(value)) {
+    return ["Username must start with a letter and be 3-50 characters using letters, numbers, dot, underscore, or hyphen"];
+  }
+  return [];
+};
+
+const validatePersonName = (name, label) => {
+  const value = clean(name);
+  if (!value) return [`${label} is required`];
+  if (value.length < 2) return [`${label} must be at least 2 characters`];
+  if (value.length > 50) return [`${label} must be 50 characters or less`];
+  if (!NAME_REGEX.test(value)) return [`${label} can only contain letters, spaces, hyphens, apostrophes, and periods`];
+  return [];
+};
+
 const validatePasswordChange = (currentPassword, newPassword) => {
   const errors = [];
 
@@ -87,4 +112,6 @@ module.exports = {
   validateResetPassword,
   validateOTPCode,
   validatePasswordStrength,
+  validateUsername,
+  validatePersonName,
 };

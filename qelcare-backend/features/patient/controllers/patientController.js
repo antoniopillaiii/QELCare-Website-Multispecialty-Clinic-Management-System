@@ -19,6 +19,20 @@ function futureDobError(value) {
   return null;
 }
 
+// App-wide phone rule (same as registration and profile updates): PH mobile
+// 09XXXXXXXXX, +639XXXXXXXXX, or an international number +<10-14 digits>
+// (landlines fit as +63...). Optional, so empty passes. Returns an error or null.
+function phoneError(value, label) {
+  if (value === undefined || value === null || String(value).trim() === "") return null;
+  const raw = String(value).trim();
+  if (raw.length > 30) return `${label} must be 30 characters or less.`;
+  const cleaned = raw.replace(/[\s\-()]/g, "");
+  if (!/^(09\d{9}|\+639\d{9}|\+\d{10,14})$/.test(cleaned)) {
+    return `${label} is invalid. Use 09XXXXXXXXX, +639XXXXXXXXX, or an international number starting with +.`;
+  }
+  return null;
+}
+
 const patientController = {
   async create(req, res) {
     try {
@@ -36,8 +50,36 @@ const patientController = {
       const dobError = futureDobError(req.body.date_of_birth);
       if (dobError) return res.status(400).json({ success: false, message: dobError });
 
+      const phoneMsg = phoneError(req.body.phone ?? req.body.contact, "Phone")
+        || phoneError(req.body.emergency_contact_phone, "Emergency phone");
+      if (phoneMsg) return res.status(400).json({ success: false, message: phoneMsg });
+
+      // Linking a record to a portal account is never client-controlled: it
+      // happens only when a patient account is verified (DB trigger). Drop
+      // user_id (and the confirmation flag) from what gets stored.
+      const { user_id: _ignoredUserId, confirm_duplicate: confirmDuplicate, ...input } = req.body;
+
+      // Warn before creating what looks like an existing patient. Staff can
+      // still create it on purpose (two different people can share a name).
+      if (confirmDuplicate !== true && firstName && lastName) {
+        const duplicates = await Patient.findPossibleDuplicates({
+          first_name: firstName,
+          last_name: lastName,
+          date_of_birth: futureDobError(input.date_of_birth) ? null : (input.date_of_birth || null),
+          phone: input.phone ?? input.contact ?? null,
+        });
+        if (duplicates.length) {
+          return res.status(409).json({
+            success: false,
+            code: "POSSIBLE_DUPLICATE",
+            message: "A patient record with the same details already exists.",
+            duplicates,
+          });
+        }
+      }
+
       const patient = await Patient.create({
-        ...req.body,
+        ...input,
         created_by: req.user.user_id,
       });
 
@@ -118,6 +160,16 @@ const patientController = {
 
       const dobError = futureDobError(req.body.date_of_birth);
       if (dobError) return res.status(400).json({ success: false, message: dobError });
+
+      const existing = await Patient.findById(req.params.id);
+      if (!existing) return res.status(404).json({ success: false, message: "Patient not found." });
+      // Validate a phone only when it is being changed, so records saved before
+      // this rule existed can still be edited without retyping their number.
+      const changed = (next, current) => String(next ?? "").trim() !== String(current ?? "").trim();
+      const nextPhone = req.body.phone ?? req.body.contact;
+      const phoneMsg = (changed(nextPhone, existing.phone || existing.contact) && phoneError(nextPhone, "Phone"))
+        || (changed(req.body.emergency_contact_phone, existing.emergency_contact_phone) && phoneError(req.body.emergency_contact_phone, "Emergency phone"));
+      if (phoneMsg) return res.status(400).json({ success: false, message: phoneMsg });
 
       const patient = await Patient.update(req.params.id, req.body);
       if (!patient) return res.status(404).json({ success: false, message: "Patient not found." });

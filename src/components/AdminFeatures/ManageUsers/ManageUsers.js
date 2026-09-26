@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MainLayout from "../../Layout/MainLayout";
 import Pagination from "../../common/Pagination";
 import { API_URL, authFetch, getToken } from "../../../utils/auth";
@@ -89,6 +89,35 @@ async function parseApiResponse(response) {
     throw new Error(data.message || "Request failed");
   }
   return data;
+}
+
+// fetch() only throws a TypeError ("Failed to fetch") when the server can't be
+// reached; say that plainly instead of showing the browser's wording.
+function friendlyError(error, fallback) {
+  if (error instanceof TypeError) return "Could not reach the server. Check the connection and try again.";
+  return error?.message || fallback;
+}
+
+// Same rules the server applies to admin-created accounts (authValidator.js),
+// checked here first so the admin gets the message without a round trip.
+const USERNAME_RE = /^[a-zA-Z][a-zA-Z0-9._-]{2,49}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const NAME_RE = /^[A-Za-zÀ-ÿ.'\- ]{2,50}$/;
+const PHONE_RE = /^(09\d{9}|\+639\d{9}|\+\d{10,14})$/;
+const PASSWORD_HINT = "At least 8 characters with uppercase and lowercase letters, a number, and a special character (@$!%*?&#).";
+
+function newUserError(form) {
+  if (!USERNAME_RE.test(form.username.trim())) return "Username must start with a letter and be 3-50 characters using letters, numbers, dot, underscore, or hyphen.";
+  if (!EMAIL_RE.test(form.email.trim())) return "Enter a valid email address.";
+  if (!NAME_RE.test(form.first_name.trim())) return "First name must be at least 2 characters using letters, spaces, hyphens, apostrophes, or periods.";
+  if (!NAME_RE.test(form.last_name.trim())) return "Last name must be at least 2 characters using letters, spaces, hyphens, apostrophes, or periods.";
+  const phone = form.phone.trim().replace(/[\s\-()]/g, "");
+  if (phone && !PHONE_RE.test(phone)) return "Phone is invalid. Use 09XXXXXXXXX or +639XXXXXXXXX.";
+  const pw = form.password;
+  if (pw.length < 8 || pw.length > 128 || !/[a-z]/.test(pw) || !/[A-Z]/.test(pw) || !/\d/.test(pw) || !/[@$!%*?&#]/.test(pw)) {
+    return `Password doesn't meet the requirements: ${PASSWORD_HINT.charAt(0).toLowerCase()}${PASSWORD_HINT.slice(1)}`;
+  }
+  return null;
 }
 
 async function uploadProfilePhoto(userId, file) {
@@ -319,6 +348,8 @@ function UserModal({ user, roles, specialties, mode, onClose, onSave, saving }) 
       }
       return next;
     });
+    // An error describes the form as it was submitted; editing it clears it.
+    setError("");
   };
 
   const submit = (event) => {
@@ -353,6 +384,12 @@ function UserModal({ user, roles, specialties, mode, onClose, onSave, saving }) 
 
     if (isDoctorRole && !form.specialty_id) {
       setError("Doctor accounts require a specialty so patients can book correctly.");
+      return;
+    }
+
+    const ruleError = newUserError(form);
+    if (ruleError) {
+      setError(ruleError);
       return;
     }
 
@@ -506,6 +543,7 @@ function UserModal({ user, roles, specialties, mode, onClose, onSave, saving }) 
                 {!isEdit && (
                   <Field label="Temporary Password">
                     <input name="password" type="password" value={form.password} onChange={handleChange} style={inputStyle} />
+                    <div style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>{PASSWORD_HINT}</div>
                   </Field>
                 )}
               </div>
@@ -588,6 +626,10 @@ export default function ManageUsers() {
   const [roles, setRoles] = useState([]);
   const [specialties, setSpecialties] = useState([]);
   const [loading, setLoading] = useState(true);
+  // A failed load must not look like an empty directory: keep the error, and
+  // remember whether any data has loaded so stats/list can say "unknown".
+  const [loadError, setLoadError] = useState("");
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [alert, setAlert] = useState(null);
   const [roleFilter, setRoleFilter] = useState("All");
@@ -601,10 +643,15 @@ export default function ManageUsers() {
   const [confirm, setConfirm] = useState(null);
   const itemsPerPage = 8;
 
+  // Each toast replaces the previous one, and its timer with it — otherwise an
+  // older toast's timer hides a newer toast (e.g. a warning) seconds early.
+  const alertTimer = useRef(null);
   const showAlert = useCallback((type, message) => {
     setAlert({ type, message });
-    window.setTimeout(() => setAlert(null), 4200);
+    window.clearTimeout(alertTimer.current);
+    alertTimer.current = window.setTimeout(() => setAlert(null), type === "warn" ? 9000 : 4200);
   }, []);
+  useEffect(() => () => window.clearTimeout(alertTimer.current), []);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -620,13 +667,15 @@ export default function ManageUsers() {
       setUsers(Array.isArray(usersData.data) ? usersData.data : []);
       setRoles(Array.isArray(rolesData.data) ? rolesData.data : []);
       setSpecialties(Array.isArray(specialtiesData.data) ? specialtiesData.data : specialtiesData.specialties || []);
+      setHasLoaded(true);
+      setLoadError("");
     } catch (error) {
       console.error("Manage users load error:", error);
-      showAlert("err", error.message || "Failed to load users");
+      setLoadError(friendlyError(error, "Failed to load users."));
     } finally {
       setLoading(false);
     }
-  }, [showAlert]);
+  }, []);
 
   useEffect(() => {
     setCurrentUserId(getCurrentUserId());
@@ -724,17 +773,30 @@ export default function ManageUsers() {
           body: JSON.stringify(payload),
         }));
         const createdUserId = created.data?.user_id;
+        // The account exists from here on. A failed photo upload is a partial
+        // success: close the form and list the new user, and say only the photo
+        // failed — reporting it as a failed save made admins create the account
+        // again under another username.
+        let photoError = null;
         if (profileFile && createdUserId) {
-          await uploadProfilePhoto(createdUserId, profileFile);
+          try {
+            await uploadProfilePhoto(createdUserId, profileFile);
+          } catch (uploadError) {
+            photoError = friendlyError(uploadError, "Upload failed");
+          }
         }
-        showAlert("ok", profileFile ? "User and profile photo created successfully" : "User created successfully");
+        if (photoError) {
+          showAlert("warn", `User created, but the profile photo couldn't be uploaded (${photoError}). The user can add a photo later from Profile Settings.`);
+        } else {
+          showAlert("ok", profileFile ? "User and profile photo created successfully" : "User created successfully");
+        }
       }
 
       setModal(null);
       await loadData();
     } catch (error) {
       console.error("Manage users save error:", error);
-      showAlert("err", error.message || "Failed to save user");
+      showAlert("err", friendlyError(error, "Failed to save user"));
     } finally {
       setSaving(false);
     }
@@ -760,7 +822,7 @@ export default function ManageUsers() {
       await loadData();
     } catch (error) {
       console.error("Manage users remove error:", error);
-      showAlert("err", error.message || "Failed to deactivate user");
+      showAlert("err", friendlyError(error, "Failed to deactivate user"));
     }
   };
 
@@ -774,14 +836,25 @@ export default function ManageUsers() {
           zIndex: 700,
           padding: "12px 16px",
           borderRadius: 12,
-          background: alert.type === "ok" ? "#eaf8f0" : "#fff2f4",
-          color: alert.type === "ok" ? C.ok : C.danger,
-          border: `1px solid ${alert.type === "ok" ? "#b8e5cc" : "#f7c5cb"}`,
+          maxWidth: "min(440px, calc(100vw - 44px))",
+          background: alert.type === "ok" ? "#eaf8f0" : alert.type === "warn" ? C.amberL : "#fff2f4",
+          color: alert.type === "ok" ? C.ok : alert.type === "warn" ? C.amber : C.danger,
+          border: `1px solid ${alert.type === "ok" ? "#b8e5cc" : alert.type === "warn" ? "#f2d9a8" : "#f7c5cb"}`,
           boxShadow: "0 8px 24px rgba(15,23,42,.16)",
           fontSize: 13,
           fontWeight: 800,
-        }}>
+        }} role={alert.type === "ok" ? "status" : "alert"}>
           {alert.message}
+        </div>
+      )}
+
+      {/* Load failure: persistent, with Retry — distinct from an empty directory. */}
+      {loadError && (
+        <div role="alert" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 16, padding: "11px 14px", background: C.amberL, border: "1px solid #f2d9a8", borderRadius: 12, color: C.amber, fontSize: 13, fontWeight: 700 }}>
+          <span>{hasLoaded ? `Could not refresh users. ${loadError} The list below may be out of date.` : `Could not load users. ${loadError}`}</span>
+          <button onClick={loadData} disabled={loading} style={{ background: "#fff", border: "1px solid #f2d9a8", borderRadius: 9, padding: "6px 12px", fontSize: 12, fontWeight: 800, color: C.amber, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.6 : 1, fontFamily: "inherit" }}>
+            {loading ? "Retrying..." : "Retry"}
+          </button>
         </div>
       )}
 
@@ -797,7 +870,7 @@ export default function ManageUsers() {
             sheetTitle="Users"
             columns={EXPORT_COLUMNS}
             rows={filteredUsers}
-            disabled={loading}
+            disabled={loading || !hasLoaded}
           />
           <Button onClick={loadData} disabled={loading}>Refresh</Button>
           <Button variant="primary" onClick={() => setModal({ mode: "create", user: null })}>Add User</Button>
@@ -806,14 +879,14 @@ export default function ManageUsers() {
 
       <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 14, marginBottom: 18 }}>
         {[
-          { label: "Total Users", value: stats.total, sub: `${stats.active} active`, color: C.blue },
+          { label: "Total Users", value: stats.total, sub: hasLoaded ? `${stats.active} active` : "Not loaded", color: C.blue },
           { label: "Medical Staff", value: stats.medical, sub: "Doctors and nurses", color: C.blue2 },
           { label: "Locked", value: stats.locked, sub: "Needs admin review", color: C.danger },
           { label: "Deactivated", value: stats.deactivated, sub: "Access blocked", color: "#666" },
         ].map((item) => (
           <div key={item.label} style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, boxShadow: "0 2px 10px rgba(15,23,42,.05)" }}>
             <div style={{ fontSize: 11, color: C.muted, fontWeight: 900, textTransform: "uppercase", letterSpacing: ".05em" }}>{item.label}</div>
-            <div style={{ fontSize: 30, fontWeight: 900, color: item.color, marginTop: 8 }}>{loading ? "-" : item.value}</div>
+            <div style={{ fontSize: 30, fontWeight: 900, color: item.color, marginTop: 8 }}>{loading || !hasLoaded ? "-" : item.value}</div>
             <div style={{ fontSize: 12, color: C.text, marginTop: 4 }}>{item.sub}</div>
           </div>
         ))}
@@ -848,14 +921,21 @@ export default function ManageUsers() {
               <Button variant={viewMode === "list" ? "primary" : "secondary"} onClick={() => setViewMode("list")}>List</Button>
             </div>
           </div>
-          <div style={{ color: C.text, fontSize: 12, fontWeight: 700 }}>
-            Showing {pageUsers.length} of {filteredUsers.length} matched user{filteredUsers.length === 1 ? "" : "s"}
-          </div>
+          {hasLoaded && (
+            <div style={{ color: C.text, fontSize: 12, fontWeight: 700 }}>
+              Showing {pageUsers.length} of {filteredUsers.length} matched user{filteredUsers.length === 1 ? "" : "s"}
+            </div>
+          )}
         </div>
 
         <div style={{ padding: 18 }}>
           {loading ? (
             <div style={{ padding: 36, textAlign: "center", color: C.text, fontWeight: 800 }}>Loading users...</div>
+          ) : !hasLoaded ? (
+            <div style={{ padding: 36, textAlign: "center" }}>
+              <div style={{ color: C.navy, fontSize: 16, fontWeight: 900 }}>Users couldn't be loaded</div>
+              <div style={{ color: C.text, fontSize: 13, marginTop: 5 }}>This is a connection or server problem, not an empty directory. Use Retry above.</div>
+            </div>
           ) : pageUsers.length === 0 ? (
             <div style={{ padding: 36, textAlign: "center", color: C.text, fontWeight: 800 }}>No users match the current filters.</div>
           ) : viewMode === "grid" ? (
@@ -882,7 +962,7 @@ export default function ManageUsers() {
           )}
         </div>
 
-        {!loading && (
+        {!loading && hasLoaded && (
           <Pagination
             page={page}
             totalPages={totalPages}

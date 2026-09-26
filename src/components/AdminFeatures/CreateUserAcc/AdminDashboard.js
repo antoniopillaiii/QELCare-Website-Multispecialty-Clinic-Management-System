@@ -8,13 +8,20 @@ import { C } from "../../../utils/adminTheme";
 
 // --- Appointment status config -------------------------------------------------
 const STATUS_CFG = {
-  PENDING:   { label: "Pending",   bg: "#f5f5f5",  color: "#666"       },
-  CONFIRMED: { label: "Confirmed", bg: C.blueL,    color: C.blue       },
-  IN_QUEUE:  { label: "In Queue",  bg: C.amberL,   color: C.amber      },
-  COMPLETED: { label: "Completed", bg: C.tealL,    color: C.teal       },
-  CANCELLED: { label: "Cancelled", bg: "#fff2f4",  color: "#b63342"    },
-  NO_SHOW:   { label: "No Show",   bg: "#f1f5f9",  color: "#64748b"    },
+  PENDING:     { label: "Pending",     bg: "#f5f5f5",  color: "#666"       },
+  CONFIRMED:   { label: "Confirmed",   bg: C.blueL,    color: C.blue       },
+  RESCHEDULED: { label: "Rescheduled", bg: C.purpleL,  color: C.purple     },
+  IN_QUEUE:    { label: "In Queue",    bg: C.amberL,   color: C.amber      },
+  FOR_BILLING: { label: "For Billing", bg: C.greenL,   color: C.green      },
+  COMPLETED:   { label: "Completed",   bg: C.tealL,    color: C.teal       },
+  NO_SHOW:     { label: "No Show",     bg: "#f1f5f9",  color: "#64748b"    },
+  CANCELLED:   { label: "Cancelled",   bg: "#fff2f4",  color: "#b63342"    },
 };
+// Display order for the filter tabs and the "Today by Status" breakdown.
+const STATUS_ORDER = Object.keys(STATUS_CFG);
+// Lost visits. "Appointments Today" counts every status except these (same rule
+// as the backend), so card = list total minus these.
+const LOST_STATUSES = ["CANCELLED", "NO_SHOW"];
 
 // --- Dept colors (cycle) ------------------------------------------------------
 const DEPT_COLORS = [C.blue, C.green, C.amber, C.purple, C.teal, "#6b1616", "#1a536b", "#6b6b16"];
@@ -203,6 +210,10 @@ export default function AdminDashboard() {
   const filteredAppts = statusFilter === "ALL"
     ? todayAppts
     : todayAppts.filter(a => a.status === statusFilter);
+  const countedToday = todayAppts.filter(a => !LOST_STATUSES.includes(a.status)).length;
+  // RESCHEDULED is a legacy status (rescheduling now resets to PENDING), so it
+  // only gets a tab / breakdown row on days that actually have one.
+  const shownStatuses = STATUS_ORDER.filter(s => s !== "RESCHEDULED" || todayAppts.some(a => a.status === s));
 
   // Paginate the today's-appointments panel; switching the status tab resets to page 1.
   const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(
@@ -218,7 +229,7 @@ export default function AdminDashboard() {
   // Manila date by the Appointments page, which reads ?date / ?status.
   const METRICS = [
     { label: "Total Users",        value: totalUsers,        icon: IC.users,    color: C.blue,   bg: C.blueL,   to: "/admin/users" },
-    { label: "Total Patients",     value: totalPatients,     icon: IC.patients, color: C.green,  bg: C.greenL,  to: "/admin/patients" },
+    { label: "Active Patients",    value: totalPatients,     icon: IC.patients, color: C.green,  bg: C.greenL,  to: "/admin/patients" },
     { label: "Appointments Today", value: appointmentsToday, icon: IC.appt,     color: C.amber,  bg: C.amberL,  to: "/admin/appointments?date=today" },
     { label: "Active Queue",       value: activeQueue,       icon: IC.queue,    color: C.purple, bg: C.purpleL, to: "/admin/queue" },
     { label: "Completed Today",    value: completedToday,    icon: IC.done,     color: C.teal,   bg: C.tealL,   to: "/admin/appointments?date=today&status=COMPLETED" },
@@ -390,7 +401,7 @@ export default function AdminDashboard() {
                 buttons with no indication of which filter is active. The colour
                 change alone also fails contrast-independent identification. */}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }} role="group" aria-label="Filter today's appointments by status">
-              {["ALL", "PENDING", "CONFIRMED", "IN_QUEUE", "COMPLETED"].map(s => {
+              {["ALL", ...shownStatuses].map(s => {
                 const active = statusFilter === s;
                 const cfg = s === "ALL" ? { label: "All", bg: C.blueL, color: C.blue } : STATUS_CFG[s];
                 return (
@@ -461,6 +472,7 @@ export default function AdminDashboard() {
           {!loadingDash && (
             <div style={{ padding: "8px 18px", borderTop: `1px solid #f0f4f9`, fontSize: 11.5, color: C.muted }}>
               {filteredAppts.length} of {todayAppts.length} appointment{todayAppts.length !== 1 ? "s" : ""} today
+              {" · "}{countedToday} excluding cancelled and no-show
             </div>
           )}
 
@@ -501,14 +513,10 @@ export default function AdminDashboard() {
                 <>
                   <div style={{ borderTop: `1px solid #f0f4f9`, margin: "12px 0", paddingTop: 12 }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 10, letterSpacing: ".04em", textTransform: "uppercase" }}>Today by Status</div>
-                    {[
-                      { label: "Pending",   count: todayAppts.filter(a => a.status === "PENDING").length,   color: "#666",   bg: "#f5f5f5"  },
-                      { label: "Confirmed", count: todayAppts.filter(a => a.status === "CONFIRMED").length, color: C.blue,   bg: C.blueL   },
-                      { label: "In Queue",  count: todayAppts.filter(a => a.status === "IN_QUEUE").length,  color: C.amber,  bg: C.amberL  },
-                      { label: "Completed", count: todayAppts.filter(a => a.status === "COMPLETED").length, color: C.teal,   bg: C.tealL   },
-                      { label: "No Show",   count: todayAppts.filter(a => a.status === "NO_SHOW").length,   color: "#64748b", bg: "#f1f5f9" },
-                      { label: "Cancelled", count: todayAppts.filter(a => a.status === "CANCELLED").length, color: "#b63342", bg: "#fff2f4" },
-                    ].map(s => (
+                    {shownStatuses.map(status => ({
+                      ...STATUS_CFG[status],
+                      count: todayAppts.filter(a => a.status === status).length,
+                    })).map(s => (
                       <div key={s.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                         <span style={{ fontSize: 11.5, fontWeight: 600, color: C.navy }}>{s.label}</span>
                         <span style={{

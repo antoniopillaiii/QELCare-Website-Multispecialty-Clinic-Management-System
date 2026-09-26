@@ -296,10 +296,15 @@ router.get("/dashboard", async (req, res) => {
     const [metrics, weekly, deptToday, todayList] = await Promise.all([
       pool.query(`
         SELECT
+          -- "Appointments Today" = every appointment on today's date except the
+          -- lost ones (CANCELLED, NO_SHOW). RESCHEDULED is an active pre-visit
+          -- status in the appointment model (ACTIVE_VISIBLE_STATUSES), and
+          -- FOR_BILLING is a visit in progress, so both count. The 7-day chart,
+          -- Department Load and the dashboard's today list use this same rule.
           (SELECT COUNT(*)
            FROM appointments
            WHERE date = CURRENT_DATE
-             AND status NOT IN ('CANCELLED','NO_SHOW','RESCHEDULED')
+             AND status NOT IN ('CANCELLED','NO_SHOW')
           )::int AS appointments_today,
           (SELECT COUNT(*)
            FROM appointments
@@ -332,7 +337,7 @@ router.get("/dashboard", async (req, res) => {
         ) AS d(day)
         LEFT JOIN appointments a
           ON  a.date = d.day::date
-          AND a.status NOT IN ('CANCELLED','NO_SHOW','RESCHEDULED')
+          AND a.status NOT IN ('CANCELLED','NO_SHOW')
         GROUP BY d.day
         ORDER BY d.day ASC
       `),
@@ -343,7 +348,7 @@ router.get("/dashboard", async (req, res) => {
         FROM appointments a
         LEFT JOIN specialties s ON a.specialty_id = s.specialty_id
         WHERE a.date = CURRENT_DATE
-          AND a.status NOT IN ('CANCELLED','NO_SHOW','RESCHEDULED')
+          AND a.status NOT IN ('CANCELLED','NO_SHOW')
         GROUP BY s.specialty_name
         ORDER BY count DESC
         LIMIT 8
@@ -360,10 +365,10 @@ router.get("/dashboard", async (req, res) => {
         JOIN patients p ON a.patient_id = p.id
         JOIN users u ON a.doctor_id = u.user_id
         LEFT JOIN specialties s ON a.specialty_id = s.specialty_id
+        -- Every status, including FOR_BILLING and RESCHEDULED (previously left
+        -- out), and no row cap, so the list always adds up to the card above.
         WHERE a.date = CURRENT_DATE
-          AND a.status IN ('PENDING','CONFIRMED','IN_QUEUE','COMPLETED','NO_SHOW','CANCELLED')
         ORDER BY a.time ASC
-        LIMIT 60
       `),
     ]);
 

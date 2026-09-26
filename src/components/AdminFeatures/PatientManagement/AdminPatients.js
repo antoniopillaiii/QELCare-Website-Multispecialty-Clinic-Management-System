@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MainLayout from "../../Layout/MainLayout";
 import Pagination from "../../common/Pagination";
 import { authFetch } from "../../../utils/auth";
@@ -30,10 +30,43 @@ function parseApi(responsePromise) {
     if (!response) throw new Error("Request was not completed.");
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || payload.success === false) {
-      throw new Error(payload.message || payload.error || "Request failed.");
+      const error = new Error(payload.message || payload.error || "Request failed.");
+      error.status = response.status;
+      error.payload = payload;
+      throw error;
     }
     return payload;
   });
+}
+
+// fetch() only throws a TypeError ("Failed to fetch") when the server can't be
+// reached; say that plainly instead of showing the browser's wording.
+function friendlyError(error, fallback) {
+  if (error instanceof TypeError) return "Could not reach the server. Check the connection and try again.";
+  return error?.message || fallback;
+}
+
+// App-wide phone rule (same as the server): 09XXXXXXXXX, +639XXXXXXXXX, or an
+// international number +<10-14 digits>.
+const PHONE_RE = /^(09\d{9}|\+639\d{9}|\+\d{10,14})$/;
+function phoneProblem(value, original, label) {
+  const next = String(value || "").trim();
+  // Only a number being entered or changed is checked, so records saved before
+  // this rule existed can still be edited.
+  if (!next || next === String(original || "").trim()) return null;
+  return PHONE_RE.test(next.replace(/[\s\-()]/g, ""))
+    ? null
+    : `${label} is invalid. Use 09XXXXXXXXX, +639XXXXXXXXX, or an international number starting with +.`;
+}
+
+// Table search, done over the full list so the stat cards above keep describing
+// all records. Same fields the server search covers (names, phone, email); the
+// text is matched literally, so "%" or "_" are just characters.
+function matchesSearch(patient, query) {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return [getPatientName(patient), patient.first_name, patient.last_name, patient.name, patient.phone, patient.contact, patient.email]
+    .some((value) => String(value || "").toLowerCase().includes(q));
 }
 
 function toDateInput(value) {
@@ -207,10 +240,11 @@ function ReadOnly({ label, value }) {
   );
 }
 
-function PatientModal({ mode, patient, saving, onClose, onSave }) {
+function PatientModal({ mode, patient, saving, onClose, onSave, duplicates, onCreateAnyway, onClearDuplicates }) {
   const isView = mode === "view";
   const isEdit = mode === "edit";
   const [error, setError] = useState("");
+  const original = normalizePatient(patient || {});
   const [form, setForm] = useState(() => {
     const p = normalizePatient(patient || {});
     return {
@@ -235,6 +269,10 @@ function PatientModal({ mode, patient, saving, onClose, onSave }) {
   const set = (event) => {
     const { name, value } = event.target;
     setForm((prev) => ({ ...prev, [name]: value }));
+    // An error (or duplicate warning) describes the form as it was submitted;
+    // editing any field clears it so a fixed problem stops being reported.
+    setError("");
+    onClearDuplicates?.();
   };
 
   const submit = (event) => {
@@ -246,6 +284,12 @@ function PatientModal({ mode, patient, saving, onClose, onSave }) {
     }
     if (form.date_of_birth && form.date_of_birth > todayInput()) {
       setError("Date of birth cannot be in the future.");
+      return;
+    }
+    const phoneError = phoneProblem(form.phone, original.phone, "Phone")
+      || phoneProblem(form.emergency_contact_phone, original.emergency_contact_phone, "Emergency phone");
+    if (phoneError) {
+      setError(phoneError);
       return;
     }
     onSave({
@@ -315,7 +359,24 @@ function PatientModal({ mode, patient, saving, onClose, onSave }) {
         ) : (
           <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
             <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 24, background: "#fafbfd", display: "grid", gap: 16, alignContent: "start" }}>
-              {error && <div style={{ padding: "12px 14px", borderRadius: 10, background: "#fff2f4", color: C.danger, border: "1px solid #f7c5cb", fontSize: 13, fontWeight: 800 }}>{error}</div>}
+              {error && <div role="alert" style={{ padding: "12px 14px", borderRadius: 10, background: "#fff2f4", color: C.danger, border: "1px solid #f7c5cb", fontSize: 13, fontWeight: 800 }}>{error}</div>}
+
+              {duplicates?.length > 0 && (
+                <div role="alert" style={{ padding: "12px 14px", borderRadius: 10, background: C.amberL, color: C.amber, border: "1px solid #f2d9a8", fontSize: 13, fontWeight: 700, display: "grid", gap: 8 }}>
+                  <div style={{ fontWeight: 900 }}>Possible duplicate — {duplicates.length === 1 ? "an existing record matches" : `${duplicates.length} existing records match`} this name and date of birth or phone:</div>
+                  <ul style={{ margin: 0, paddingLeft: 18, color: C.navy, fontWeight: 700 }}>
+                    {duplicates.map((d) => (
+                      <li key={d.id}>
+                        #{d.id} {d.display_name} — born {d.date_of_birth ? formatDate(d.date_of_birth) : "not set"} — {d.phone || "no phone"} — {d.is_active ? "Active" : "Inactive"}
+                      </li>
+                    ))}
+                  </ul>
+                  <div>If this is a different person, choose Create anyway. Otherwise cancel and use the existing record.</div>
+                  <div>
+                    <Button variant="primary" onClick={onCreateAnyway} disabled={saving}>{saving ? "Saving..." : "Create anyway"}</Button>
+                  </div>
+                </div>
+              )}
 
               <div style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 14 }}>
                 <Field label="First Name *"><input name="first_name" value={form.first_name} onChange={set} style={inputStyle} /></Field>
@@ -402,6 +463,12 @@ const tdStyle = { padding: "13px 14px", color: C.text, fontSize: 13, verticalAli
 export default function AdminPatients() {
   const [patients, setPatients] = useState([]);
   const [loading, setLoading] = useState(true);
+  // A failed load must not look like an empty patient list (see Users page).
+  const [loadError, setLoadError] = useState("");
+  const [hasLoaded, setHasLoaded] = useState(false);
+  // Server-reported possible duplicates for the record being added, plus the
+  // payload to resend if the user confirms it is a different person.
+  const [duplicateCheck, setDuplicateCheck] = useState(null);
   const [saving, setSaving] = useState(false);
   const [alert, setAlert] = useState(null);
   const [search, setSearch] = useState("");
@@ -412,36 +479,37 @@ export default function AdminPatients() {
   const [modal, setModal] = useState(null);
   const [confirm, setConfirm] = useState(null);
 
+  // Each toast replaces the previous one, and its timer with it — otherwise an
+  // older toast's timer hides a newer toast early.
+  const alertTimer = useRef(null);
   const showAlert = useCallback((type, message) => {
     setAlert({ type, message });
-    window.setTimeout(() => setAlert(null), 4200);
+    window.clearTimeout(alertTimer.current);
+    alertTimer.current = window.setTimeout(() => setAlert(null), 4200);
   }, []);
+  useEffect(() => () => window.clearTimeout(alertTimer.current), []);
 
-  const loadPatients = useCallback(async (query = "") => {
+  // Loads every patient record. Search/filters are applied to this full list in
+  // the browser, so the stat cards always describe all records.
+  const loadPatients = useCallback(async () => {
     setLoading(true);
     try {
-      const payload = await parseApi(authFetch(`/patients?search=${encodeURIComponent(query)}`));
+      const payload = await parseApi(authFetch("/patients"));
       const list = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.patients) ? payload.patients : [];
       setPatients(list.map(normalizePatient));
+      setHasLoaded(true);
+      setLoadError("");
     } catch (error) {
       console.error("Patient load error:", error);
-      showAlert("err", error.message || "Failed to load patients");
+      setLoadError(friendlyError(error, "Failed to load patients."));
     } finally {
       setLoading(false);
     }
-  }, [showAlert]);
+  }, []);
 
   useEffect(() => {
-    loadPatients("");
+    loadPatients();
   }, [loadPatients]);
-
-  useEffect(() => {
-    const id = window.setTimeout(() => {
-      setPage(1);
-      loadPatients(search);
-    }, 350);
-    return () => window.clearTimeout(id);
-  }, [search, loadPatients]);
 
   const stats = useMemo(() => {
     const now = new Date();
@@ -459,7 +527,9 @@ export default function AdminPatients() {
   }, [patients]);
 
   const filtered = useMemo(() => {
+    const query = search.trim();
     return patients.filter((patient) => {
+      if (!matchesSearch(patient, query)) return false;
       const statusMatches =
         statusFilter === "all" ||
         (statusFilter === "active" && patient.is_active) ||
@@ -470,20 +540,21 @@ export default function AdminPatients() {
         (completionFilter === "incomplete" && isIncomplete(patient));
       return statusMatches && completionMatches;
     });
-  }, [patients, statusFilter, completionFilter]);
+  }, [patients, search, statusFilter, completionFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / rowsPerPage));
   const safePage = Math.min(page, totalPages);
   const pagePatients = filtered.slice((safePage - 1) * rowsPerPage, safePage * rowsPerPage);
 
-  const savePatient = async (payload) => {
+  const savePatient = async (payload, { confirmDuplicate = false } = {}) => {
     setSaving(true);
+    const isEdit = modal?.mode === "edit";
     try {
-      const isEdit = modal?.mode === "edit";
       const response = await parseApi(authFetch(isEdit ? `/patients/${modal.patient.id}` : "/patients", {
         method: isEdit ? "PUT" : "POST",
-        body: JSON.stringify(payload),
+        body: JSON.stringify(confirmDuplicate ? { ...payload, confirm_duplicate: true } : payload),
       }));
+      setDuplicateCheck(null);
       const saved = normalizePatient(response.data || response.patient);
       setPatients((prev) => {
         const index = prev.findIndex((patient) => patient.id === saved.id);
@@ -495,8 +566,13 @@ export default function AdminPatients() {
       setModal(null);
       showAlert("ok", isEdit ? "Patient updated successfully" : "Patient created successfully");
     } catch (error) {
+      if (!isEdit && error.payload?.code === "POSSIBLE_DUPLICATE") {
+        // Keep the form open and show the matches inside it; the user decides.
+        setDuplicateCheck({ matches: error.payload.duplicates || [], payload });
+        return;
+      }
       console.error("Patient save error:", error);
-      showAlert("err", error.message || "Failed to save patient");
+      showAlert("err", friendlyError(error, "Failed to save patient"));
     } finally {
       setSaving(false);
     }
@@ -525,7 +601,7 @@ export default function AdminPatients() {
       showAlert("ok", `Patient ${nextActive ? "activated" : "deactivated"} successfully`);
     } catch (error) {
       console.error("Patient active toggle error:", error);
-      showAlert("err", error.message || "Failed to update patient status");
+      showAlert("err", friendlyError(error, "Failed to update patient status"));
     }
   };
 
@@ -545,8 +621,18 @@ export default function AdminPatients() {
           boxShadow: "0 8px 24px rgba(15,23,42,.16)",
           fontSize: 13,
           fontWeight: 800,
-        }}>
+        }} role={alert.type === "ok" ? "status" : "alert"}>
           {alert.message}
+        </div>
+      )}
+
+      {/* Load failure: persistent, with Retry — distinct from having no patients. */}
+      {loadError && (
+        <div role="alert" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 16, padding: "11px 14px", background: C.amberL, border: "1px solid #f2d9a8", borderRadius: 12, color: C.amber, fontSize: 13, fontWeight: 700 }}>
+          <span>{hasLoaded ? `Could not refresh patient records. ${loadError} The list below may be out of date.` : `Could not load patient records. ${loadError}`}</span>
+          <button onClick={loadPatients} disabled={loading} style={{ background: "#fff", border: "1px solid #f2d9a8", borderRadius: 9, padding: "6px 12px", fontSize: 12, fontWeight: 800, color: C.amber, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.6 : 1, fontFamily: "inherit" }}>
+            {loading ? "Retrying..." : "Retry"}
+          </button>
         </div>
       )}
 
@@ -562,18 +648,18 @@ export default function AdminPatients() {
             sheetTitle="Patients"
             columns={EXPORT_COLUMNS}
             rows={filtered}
-            disabled={loading}
+            disabled={loading || !hasLoaded}
           />
-          <Button onClick={() => loadPatients(search)} disabled={loading}>Refresh</Button>
-          <Button variant="primary" onClick={() => setModal({ mode: "create", patient: null })}>Add Patient</Button>
+          <Button onClick={loadPatients} disabled={loading}>Refresh</Button>
+          <Button variant="primary" onClick={() => { setDuplicateCheck(null); setModal({ mode: "create", patient: null }); }}>Add Patient</Button>
         </div>
       </div>
 
       <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 14, marginBottom: 18 }}>
-        <StatCard label="Total Patients" value={loading ? "-" : stats.total} sub="All clinical records" color={C.blue} />
-        <StatCard label="Active Patients" value={loading ? "-" : stats.active} sub="Available for clinic workflows" color={C.teal} />
-        <StatCard label="Added This Month" value={loading ? "-" : stats.addedThisMonth} sub="New records this month" color={C.amber} />
-        <StatCard label="Incomplete Profiles" value={loading ? "-" : stats.incomplete} sub="Missing key patient details" color={C.danger} />
+        <StatCard label="Total Patients" value={loading || !hasLoaded ? "-" : stats.total} sub="All clinical records" color={C.blue} />
+        <StatCard label="Active Patients" value={loading || !hasLoaded ? "-" : stats.active} sub="Available for clinic workflows" color={C.teal} />
+        <StatCard label="Added This Month" value={loading || !hasLoaded ? "-" : stats.addedThisMonth} sub="New records this month" color={C.amber} />
+        <StatCard label="Incomplete Profiles" value={loading || !hasLoaded ? "-" : stats.incomplete} sub="Missing key patient details" color={C.danger} />
       </section>
 
       <section style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 16, boxShadow: "0 2px 10px rgba(15,23,42,.05)", overflow: "hidden" }}>
@@ -581,7 +667,7 @@ export default function AdminPatients() {
           <div style={{ display: "grid", gridTemplateColumns: "minmax(240px,1.5fr) repeat(3,minmax(150px,1fr)) auto", gap: 10, alignItems: "center" }}>
             <input
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => { setSearch(event.target.value); setPage(1); }}
               placeholder="Search name, phone, email..."
               style={inputStyle}
             />
@@ -599,7 +685,7 @@ export default function AdminPatients() {
               {ROWS_OPTIONS.map((value) => <option key={value} value={value}>{value} per page</option>)}
             </select>
             <div style={{ color: C.text, fontSize: 12, fontWeight: 800, whiteSpace: "nowrap" }}>
-              {filtered.length} matched
+              {hasLoaded ? `${filtered.length} matched` : ""}
             </div>
           </div>
         </div>
@@ -623,12 +709,19 @@ export default function AdminPatients() {
                 <tr>
                   <td colSpan={8} style={{ padding: 36, textAlign: "center", color: C.text, fontWeight: 800 }}>Loading patient records...</td>
                 </tr>
+              ) : !hasLoaded ? (
+                <tr>
+                  <td colSpan={8} style={{ padding: 42, textAlign: "center" }}>
+                    <div style={{ color: C.navy, fontSize: 16, fontWeight: 900 }}>Patient records couldn't be loaded</div>
+                    <div style={{ color: C.text, fontSize: 13, marginTop: 5 }}>This is a connection or server problem, not an empty list. Use Retry above.</div>
+                  </td>
+                </tr>
               ) : pagePatients.length === 0 ? (
                 <tr>
                   <td colSpan={8} style={{ padding: 42, textAlign: "center" }}>
                     <div style={{ color: C.navy, fontSize: 16, fontWeight: 900 }}>No patient records found</div>
                     <div style={{ color: C.text, fontSize: 13, marginTop: 5 }}>
-                      {search ? "Try a different search term." : "Create the first clinical patient record when ready."}
+                      {patients.length > 0 ? "No records match the current search or filters." : "Create the first clinical patient record when ready."}
                     </div>
                   </td>
                 </tr>
@@ -647,7 +740,7 @@ export default function AdminPatients() {
           </table>
         </div>
 
-        {!loading && (
+        {!loading && hasLoaded && (
           <Pagination
             page={safePage}
             totalPages={totalPages}
@@ -664,8 +757,11 @@ export default function AdminPatients() {
           mode={modal.mode}
           patient={modal.patient}
           saving={saving}
-          onClose={() => setModal(null)}
+          onClose={() => { setDuplicateCheck(null); setModal(null); }}
           onSave={savePatient}
+          duplicates={duplicateCheck?.matches}
+          onCreateAnyway={() => duplicateCheck && savePatient(duplicateCheck.payload, { confirmDuplicate: true })}
+          onClearDuplicates={() => setDuplicateCheck(null)}
         />
       )}
 

@@ -92,7 +92,10 @@ const Patient = {
   },
 
   async findAll({ search = "", is_active = null } = {}) {
-    const params = [`%${search}%`];
+    // Treat the search text literally: without escaping, "%" or "_" act as
+    // LIKE wildcards (a search for "%" matched every patient).
+    const literal = String(search).replace(/[\\%_]/g, "\\$&");
+    const params = [`%${literal}%`];
     let where = `WHERE (
       p.first_name ILIKE $1 OR
       p.last_name ILIKE $1 OR
@@ -140,6 +143,37 @@ const Patient = {
       [id]
     );
     return result.rows[0] || null;
+  },
+
+  // Existing records that look like the same person: same first + last name
+  // (case-insensitive) AND the same date of birth or the same phone number.
+  // With neither a DOB nor a phone to compare, a matching name alone is enough
+  // to flag. Used to warn before creating a duplicate — real patients can
+  // share names, so this is a warning the user can override, not a rule.
+  async findPossibleDuplicates({ first_name, last_name, date_of_birth = null, phone = null }) {
+    const phoneDigits = phone ? String(phone).replace(/\D/g, "").slice(-10) : null;
+    const result = await db.query(
+      `SELECT
+         p.id,
+         COALESCE(NULLIF(TRIM(CONCAT_WS(' ', p.first_name, p.last_name)), ''), p.name) AS display_name,
+         TO_CHAR(p.date_of_birth, 'YYYY-MM-DD') AS date_of_birth,
+         COALESCE(p.phone, p.contact) AS phone,
+         p.is_active
+       FROM patients p
+       WHERE (
+           (LOWER(TRIM(p.first_name)) = LOWER(TRIM($1)) AND LOWER(TRIM(p.last_name)) = LOWER(TRIM($2)))
+           OR (p.first_name IS NULL AND LOWER(TRIM(p.name)) = LOWER(TRIM($1) || ' ' || TRIM($2)))
+         )
+         AND (
+           ($3::date IS NOT NULL AND p.date_of_birth = $3::date)
+           OR ($4::text IS NOT NULL AND RIGHT(regexp_replace(COALESCE(p.phone, p.contact, ''), '\\D', '', 'g'), 10) = $4::text)
+           OR ($3::date IS NULL AND $4::text IS NULL)
+         )
+       ORDER BY p.id
+       LIMIT 5`,
+      [first_name, last_name, date_of_birth || null, phoneDigits || null]
+    );
+    return result.rows;
   },
 
   async findByUserId(userId) {

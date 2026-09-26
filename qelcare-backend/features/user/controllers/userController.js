@@ -1,6 +1,12 @@
 const User = require("../models/User");
 const pool = require("../../../config/database");
 const logger = require("../../../shared/utils/activityLogger");
+const {
+ validateEmail,
+ validatePasswordStrength,
+ validateUsername,
+ validatePersonName,
+} = require("../../auth/validators/authValidator");
 
 const VALID_STATUSES = ["verified", "unverified", "locked", "deactivated"];
 const VALID_GENDERS = ["", null, undefined, "Male", "Female", "Other"];
@@ -205,19 +211,22 @@ const getDoctors = async (_req, res) => {
  }
 };
 
+// 409 message for a username/email that already exists (case-insensitive).
+function duplicateMessage(usernameTaken, emailTaken) {
+ if (usernameTaken && emailTaken) return "Username already taken and email already in use.";
+ return usernameTaken ? "Username already taken." : "Email already in use.";
+}
+
 const createUser = async (req, res) => {
  try {
- const {
- username,
- email,
- password,
- first_name,
- last_name,
- role_id,
- specialty_id,
- phone,
- gender,
- } = req.body;
+ const username = String(req.body.username || "").trim();
+ const email = String(req.body.email || "").trim().toLowerCase();
+ const password = String(req.body.password || "");
+ const first_name = String(req.body.first_name || "").trim();
+ const last_name = String(req.body.last_name || "").trim();
+ const phone = req.body.phone ? String(req.body.phone).trim() : null;
+ const gender = req.body.gender || null;
+ const { role_id, specialty_id } = req.body;
 
  if (!username || !email || !password || !first_name || !last_name || !role_id) {
  return res.status(400).json({
@@ -226,32 +235,68 @@ const createUser = async (req, res) => {
  });
  }
 
+ // Admin-created accounts follow the same rules as patient self-registration;
+ // the Add User form is not the only way to reach this endpoint.
+ const errors = [
+ ...validateUsername(username),
+ ...validateEmail(email),
+ ...validatePersonName(first_name, "First name"),
+ ...validatePersonName(last_name, "Last name"),
+ ...validatePasswordStrength(password),
+ ];
+ const phoneMsg = phoneError(phone, "Phone");
+ if (phoneMsg) errors.push(phoneMsg);
+ if (!VALID_GENDERS.includes(gender)) errors.push("Invalid gender");
+ if (errors.length) return res.status(400).json({ success: false, message: errors[0], errors });
+
  if (!(await roleExists(role_id))) {
  return res.status(400).json({ success: false, message: "Invalid role" });
  }
- if (!(await specialtyExists(specialty_id))) {
+ const isDoctor = (await getRoleName(role_id)) === "Doctor";
+ if (isDoctor && !specialty_id) {
+ return res.status(400).json({ success: false, message: "Doctor accounts require a specialty." });
+ }
+ if (isDoctor && !(await specialtyExists(specialty_id))) {
  return res.status(400).json({ success: false, message: "Invalid specialty" });
  }
 
  const existing = await pool.query(
- "SELECT user_id FROM users WHERE username = $1 OR LOWER(email) = LOWER($2)",
+ `SELECT LOWER(username) = LOWER($1) AS username_taken, LOWER(email) = LOWER($2) AS email_taken
+ FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($2)`,
  [username, email]
  );
  if (existing.rows.length > 0) {
- return res.status(409).json({ success: false, message: "Username or email already taken" });
+ const usernameTaken = existing.rows.some((row) => row.username_taken);
+ const emailTaken = existing.rows.some((row) => row.email_taken);
+ return res.status(409).json({ success: false, message: duplicateMessage(usernameTaken, emailTaken) });
  }
 
- const newUser = await User.createUser({
+ let newUser;
+ try {
+ newUser = await User.createUser({
  username,
  email,
  password,
  first_name: toTitleCase(first_name),
  last_name: toTitleCase(last_name),
  role_id,
- specialty_id: specialty_id || null,
+ // Only Doctor accounts carry a specialty.
+ specialty_id: isDoctor ? specialty_id : null,
  phone,
  gender,
  });
+ } catch (insertError) {
+ // A concurrent request can still hit the unique indexes; report it as the
+ // conflict it is rather than a generic 500.
+ if (insertError.code === "23505") {
+ const constraint = String(insertError.constraint || "");
+ return res.status(409).json({
+ success: false,
+ message: duplicateMessage(constraint.includes("username"), constraint.includes("email")),
+ });
+ }
+ throw insertError;
+ }
 
  const roleName = await getRoleName(role_id);
  await writeLog(req, {
@@ -364,6 +409,12 @@ const updateUserStatus = async (req, res) => {
  if (!VALID_STATUSES.includes(status)) {
  return res.status(400).json({ success: false, message: "Invalid status" });
  }
+ // An admin can never lock, deactivate or un-verify their own account. This
+ // also means at least one active admin always remains: the admin making a
+ // change is active and can't remove themselves.
+ if (Number(userId) === Number(req.user.user_id)) {
+ return res.status(400).json({ success: false, message: "You can't change the status of your own account." });
+ }
 
  const before = await getAuditUser(userId);
  const updated = await User.updateStatus(userId, status);
@@ -397,12 +448,29 @@ const updateUserRole = async (req, res) => {
  if (!(await roleExists(role_id))) {
  return res.status(400).json({ success: false, message: "Invalid role" });
  }
+ // Same reason as status: an admin can't demote themselves out of admin access.
+ if (Number(userId) === Number(req.user.user_id)) {
+ return res.status(400).json({ success: false, message: "You can't change the role of your own account." });
+ }
 
  const before = await getAuditUser(userId);
+ if (!before) return res.status(404).json({ success: false, message: "User not found" });
+ const newRoleName = await getRoleName(role_id);
+ // Doctors must have a specialty so patients can book them. The Edit User
+ // form saves the specialty first, then the role.
+ if (newRoleName === "Doctor") {
+ const current = await pool.query("SELECT specialty_id FROM users WHERE user_id = $1", [userId]);
+ if (!current.rows[0]?.specialty_id) {
+ return res.status(400).json({ success: false, message: "Assign a specialty before changing this user to Doctor." });
+ }
+ }
+
  const updated = await User.updateRole(userId, role_id);
  if (!updated) return res.status(404).json({ success: false, message: "User not found" });
-
- const newRoleName = await getRoleName(role_id);
+ if (newRoleName !== "Doctor") {
+ // Only Doctor accounts carry a specialty.
+ await pool.query("UPDATE users SET specialty_id = NULL WHERE user_id = $1 AND specialty_id IS NOT NULL", [userId]);
+ }
  await writeLog(req, {
  action: "USER_ROLE_CHANGED",
  entityType: "user",
@@ -435,8 +503,14 @@ const updateUserDetails = async (req, res) => {
  if (!(await specialtyExists(specialty_id))) {
  return res.status(400).json({ success: false, message: "Invalid specialty" });
  }
+ const phoneMsg = phoneError(phone, "Phone");
+ if (phoneMsg) return res.status(400).json({ success: false, message: phoneMsg });
 
  const before = await getAuditUser(userId);
+ if (!before) return res.status(404).json({ success: false, message: "User not found" });
+ if (Object.prototype.hasOwnProperty.call(req.body, "specialty_id") && !specialty_id && before.role_name === "Doctor") {
+ return res.status(400).json({ success: false, message: "Doctor accounts require a specialty." });
+ }
  const details = {};
  if (Object.prototype.hasOwnProperty.call(req.body, "phone")) {
  details.phone = typeof phone === "string" ? phone.trim() : phone;
