@@ -21,6 +21,7 @@ const pool = require("../../../config/database");
 const logger = require("../../../shared/utils/activityLogger");
 const { authenticate, authorize } = require("../../../shared/middleware/tokenMiddleware");
 const authService = require("../services/authService");
+const { ageOnManilaToday } = require("../../../shared/utils/manilaTime");
 const {
   validateEmail,
   validateOTPCode,
@@ -68,15 +69,11 @@ function validateSqlLengths(errors, fields) {
   addMaxLengthError(errors, "Alternate phone", fields.alternatePhone, LIMITS.alternate_phone);
   addMaxLengthError(errors, "Gender", fields.gender, LIMITS.gender);
 }
+// Age as of the clinic's current day (Asia/Manila), independent of the server's
+// time zone — so a birthday counts from Manila midnight, not UTC midnight.
 function calcAge(dateValue) {
   if (!dateValue || !/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) return null;
-  const birth = new Date(`${dateValue}T00:00:00`);
-  if (Number.isNaN(birth.getTime())) return null;
-  const today = new Date();
-  let age = today.getFullYear() - birth.getFullYear();
-  const monthDiff = today.getMonth() - birth.getMonth();
-  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) age -= 1;
-  return age;
+  return ageOnManilaToday(dateValue);
 }
 function validPhone(value) {
   if (!value) return true;

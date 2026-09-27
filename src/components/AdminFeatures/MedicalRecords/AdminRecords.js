@@ -4,6 +4,7 @@ import Pagination, { usePagination } from "../../common/Pagination";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C } from "../../../utils/adminTheme";
+import { manilaToday } from "../../../utils/manilaDate";
 import { X } from "lucide-react";
 
 const EXPORT_COLUMNS = [
@@ -50,8 +51,9 @@ async function parseApi(response) {
   return payload;
 }
 
+// The clinic's current day (Manila), not the UTC date toISOString() would give.
 function todayInput() {
-  return new Date().toISOString().slice(0, 10);
+  return manilaToday();
 }
 
 function formatDate(value) {

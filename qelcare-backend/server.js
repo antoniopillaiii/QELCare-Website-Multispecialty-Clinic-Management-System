@@ -1,3 +1,9 @@
+// Run the process on UTC everywhere (Railway already does). node-postgres turns
+// DATE columns into JS Dates at the process's local midnight; on a host set to
+// e.g. Asia/Manila those serialize as the previous day. Clinic business time
+// (Asia/Manila) is always explicit — see shared/utils/manilaTime.js.
+process.env.TZ = "UTC";
+
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");

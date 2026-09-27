@@ -1,4 +1,5 @@
 const db = require("../../../config/database");
+const { manilaToday } = require("../../../shared/utils/manilaTime");
 
 const CLINICAL_FIELDS = [
   "visit_date",
@@ -56,7 +57,7 @@ function normalizeRecordInput(input = {}) {
     doctor_id: input.doctor_id ? Number(input.doctor_id) : null,
     vital_id: input.vital_id ? Number(input.vital_id) : null,
     created_by: input.created_by ? Number(input.created_by) : null,
-    visit_date: cleanDate(input.visit_date) || new Date().toISOString().slice(0, 10),
+    visit_date: cleanDate(input.visit_date) || manilaToday(),
     chief_complaint: cleanText(input.chief_complaint),
     history_of_illness: cleanText(input.history_of_illness),
     physical_exam: cleanText(input.physical_exam),

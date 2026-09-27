@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { authFetch } from "../../../utils/auth";
 import Pagination, { usePagination } from "../../common/Pagination";
+import { manilaDateOf, manilaToday } from "../../../utils/manilaDate";
 
 function num(value) {
   const parsed = Number(value);
@@ -170,11 +171,11 @@ export default function MedicalRecordReport() {
   }, [loadRecords]);
 
   const metrics = useMemo(() => {
-    const now = new Date();
+    // "This month" is the clinic's month (Asia/Manila).
+    const thisMonth = manilaToday().slice(0, 7);
     return records.reduce((acc, record) => {
-      const created = record.created_at ? new Date(record.created_at) : null;
       acc.total += 1;
-      if (created && !Number.isNaN(created.getTime()) && created.getMonth() === now.getMonth() && created.getFullYear() === now.getFullYear()) {
+      if (manilaDateOf(record.created_at).slice(0, 7) === thisMonth) {
         acc.thisMonth += 1;
       }
       if (record.prescriptions && record.prescriptions.trim()) acc.withPrescriptions += 1;

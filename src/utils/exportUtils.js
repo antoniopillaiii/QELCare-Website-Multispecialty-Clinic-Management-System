@@ -18,6 +18,7 @@
 // ============================================================
 
 import React, { useEffect, useRef, useState } from "react";
+import { CLINIC_TZ, manilaToday } from "./manilaDate";
 
 // ── Internal formatting helpers ───────────────────────────────
 function escapeHtml(value) {
@@ -49,10 +50,9 @@ function cellText(column, row) {
   return String(raw);
 }
 
+// File name date = the clinic's day (Asia/Manila).
 function dateStamp() {
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+  return manilaToday().replace(/-/g, "");
 }
 
 function withStamp(base, extension) {
@@ -74,6 +74,7 @@ function downloadBlob(filename, content, type) {
 
 function generatedLine() {
   return new Date().toLocaleString("en-PH", {
+    timeZone: CLINIC_TZ,
     month: "short",
     day: "numeric",
     year: "numeric",

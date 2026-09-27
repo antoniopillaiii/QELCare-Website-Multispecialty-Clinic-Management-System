@@ -70,6 +70,23 @@ function isValidTimeString(value) {
   return hour <= 23 && minute <= 59 && second <= 59;
 }
 
+// Calendar arithmetic on a "YYYY-MM-DD" date: pure day counting, so neither
+// the server's nor the database's time zone can shift the result.
+function addDays(dateString, days) {
+  const [year, month, day] = String(dateString).split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + Number(days))).toISOString().slice(0, 10);
+}
+
+// Whole years from a "YYYY-MM-DD" birth date to the clinic's current day.
+function ageOnManilaToday(birthDate) {
+  if (!isValidDateString(birthDate)) return null;
+  const [birthYear, birthMonth, birthDay] = birthDate.split("-").map(Number);
+  const [year, month, day] = manilaToday().split("-").map(Number);
+  let age = year - birthYear;
+  if (month < birthMonth || (month === birthMonth && day < birthDay)) age -= 1;
+  return age;
+}
+
 module.exports = {
   BUSINESS_TZ,
   MANILA_NOW_SQL,
@@ -79,4 +96,6 @@ module.exports = {
   manilaDateOf,
   isValidDateString,
   isValidTimeString,
+  addDays,
+  ageOnManilaToday,
 };

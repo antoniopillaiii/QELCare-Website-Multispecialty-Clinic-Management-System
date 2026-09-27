@@ -111,7 +111,8 @@ async function persistOtpRow(email, purpose, db) {
 
   const existing = await db.query(
     `SELECT request_count,
-            (last_request_at::date = CURRENT_DATE) AS is_same_day,
+            -- The daily OTP allowance resets at Manila midnight (the DB runs on UTC).
+            ((last_request_at AT TIME ZONE 'Asia/Manila')::date = (NOW() AT TIME ZONE 'Asia/Manila')::date) AS is_same_day,
             EXTRACT(EPOCH FROM (NOW() - last_request_at)) AS seconds_since_last
        FROM otp_requests
       WHERE LOWER(email) = LOWER($1) AND purpose = $2

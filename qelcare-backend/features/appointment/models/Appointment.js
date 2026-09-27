@@ -282,7 +282,7 @@ const BASE_SELECT = `
     SELECT mr.record_id, mr.diagnosis, mr.lab_requests, mr.visit_date, mr.created_at
     FROM medical_records mr
     WHERE mr.appointment_id = a.id
-    ORDER BY COALESCE(mr.visit_date, mr.created_at::date) DESC, mr.record_id DESC
+    ORDER BY COALESCE(mr.visit_date, (mr.created_at AT TIME ZONE 'Asia/Manila')::date) DESC, mr.record_id DESC
     LIMIT 1
   ) latest_mr ON true
 `;

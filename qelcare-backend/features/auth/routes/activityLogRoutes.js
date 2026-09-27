@@ -93,7 +93,7 @@ router.get("/", async (req, res) => {
       pool.query(
         `SELECT
            COUNT(*)::int AS total,
-           COUNT(*) FILTER (WHERE al.created_at::date = CURRENT_DATE)::int AS today,
+           COUNT(*) FILTER (WHERE (al.created_at AT TIME ZONE 'Asia/Manila')::date = (NOW() AT TIME ZONE 'Asia/Manila')::date)::int AS today,
            COUNT(*) FILTER (WHERE al.created_at >= NOW() - INTERVAL '24 hours')::int AS last_24_hours,
            COUNT(DISTINCT al.user_id) FILTER (WHERE al.user_id IS NOT NULL)::int AS active_users,
            COUNT(*) FILTER (WHERE al.user_id IS NULL)::int AS system_events

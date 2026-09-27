@@ -43,7 +43,7 @@ const PatientResult = {
       `SELECT ${SELECT_FIELDS}
        FROM patient_medical_results
        WHERE ${where}
-       ORDER BY COALESCE(result_date, created_at::date) DESC, created_at DESC`,
+       ORDER BY COALESCE(result_date, (created_at AT TIME ZONE 'Asia/Manila')::date) DESC, created_at DESC`,
       params
     );
     return result.rows;

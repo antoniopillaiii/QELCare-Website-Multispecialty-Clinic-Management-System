@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_URL } from "../../utils/auth";
+import { addYears, ageFromBirthDate, manilaToday } from "../../utils/manilaDate";
 import {
   Plus as PlusIcon,
   ArrowLeft as ArrowLeftIcon,
@@ -50,30 +51,14 @@ const isValidPhone = (ph) => {
   return /^(09\d{9}|\+639\d{9}|\+\d{10,14})$/.test(cleaned);
 };
 
-// --- Age from DOB -------------------------------------------------------------
-const calcAge = (dob) => {
-  if (!dob) return null;
-  const birth = new Date(dob);
-  const today = new Date();
-  let age = today.getFullYear() - birth.getFullYear();
-  const m = today.getMonth() - birth.getMonth();
-  if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--;
-  return age;
-};
+// --- Age from DOB (as of the clinic's day, Asia/Manila) -----------------------
+const calcAge = (dob) => (dob ? ageFromBirthDate(dob) : null);
 
 // --- Max DOB date (must be at least 1 year old) -------------------------------
-const maxDOB = () => {
-  const d = new Date();
-  d.setFullYear(d.getFullYear() - 1);
-  return d.toISOString().split("T")[0];
-};
+const maxDOB = () => addYears(manilaToday(), -1);
 
 // --- Min DOB date (no older than 120 years) -----------------------------------
-const minDOB = () => {
-  const d = new Date();
-  d.setFullYear(d.getFullYear() - 120);
-  return d.toISOString().split("T")[0];
-};
+const minDOB = () => addYears(manilaToday(), -120);
 
 // --- Username rules -----------------------------------------------------------
 const USERNAME_REGEX = /^[a-zA-Z0-9_.-]{3,30}$/;

@@ -4,6 +4,7 @@ import Pagination from "../../common/Pagination";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C } from "../../../utils/adminTheme";
+import { ageFromBirthDate, manilaDateOf, manilaToday } from "../../../utils/manilaDate";
 import ConfirmModal from "../../common/ConfirmModal";
 import { X } from "lucide-react";
 
@@ -69,39 +70,32 @@ function matchesSearch(patient, query) {
     .some((value) => String(value || "").toLowerCase().includes(q));
 }
 
+// Dates of birth are calendar dates: read the YYYY-MM-DD part as-is so the
+// device's time zone can never move them by a day.
+function calendarDate(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? { text: match[0], year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) } : null;
+}
+
 function toDateInput(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toISOString().slice(0, 10);
+  return calendarDate(value)?.text || "";
 }
 
 function formatDate(value) {
-  if (!value) return "Not set";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Not set";
-  return date.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" });
+  const parts = calendarDate(value);
+  if (!parts) return "Not set";
+  return new Date(parts.year, parts.month - 1, parts.day).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" });
 }
 
 // Today's date (Asia/Manila) as YYYY-MM-DD — the max allowed date of birth.
 function todayInput() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Manila", year: "numeric", month: "2-digit", day: "2-digit",
-  }).formatToParts(new Date());
-  const v = Object.fromEntries(parts.map((p) => [p.type, p.value]));
-  return `${v.year}-${v.month}-${v.day}`;
+  return manilaToday();
 }
 
 function calculateAge(patient) {
   if (patient.age) return Number(patient.age);
-  if (!patient.date_of_birth) return null;
-  const dob = new Date(patient.date_of_birth);
-  if (Number.isNaN(dob.getTime())) return null;
-  const today = new Date();
-  let age = today.getFullYear() - dob.getFullYear();
-  const monthDiff = today.getMonth() - dob.getMonth();
-  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) age -= 1;
-  return age >= 0 ? age : null;
+  const age = ageFromBirthDate(patient.date_of_birth);
+  return age !== null && age >= 0 ? age : null;
 }
 
 function getPatientName(patient) {
@@ -512,11 +506,9 @@ export default function AdminPatients() {
   }, [loadPatients]);
 
   const stats = useMemo(() => {
-    const now = new Date();
-    const addedThisMonth = patients.filter((patient) => {
-      const created = new Date(patient.created_at);
-      return !Number.isNaN(created.getTime()) && created.getFullYear() === now.getFullYear() && created.getMonth() === now.getMonth();
-    }).length;
+    // "This month" is the clinic's month (Asia/Manila).
+    const thisMonth = manilaToday().slice(0, 7);
+    const addedThisMonth = patients.filter((patient) => manilaDateOf(patient.created_at).slice(0, 7) === thisMonth).length;
 
     return {
       total: patients.length,

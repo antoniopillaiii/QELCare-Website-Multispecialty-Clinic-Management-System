@@ -3,13 +3,16 @@ import MainLayout from "../../Layout/MainLayout";
 import Pagination, { usePagination } from "../../common/Pagination";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
+import { CLINIC_TZ, manilaDateOf, manilaToday } from "../../../utils/manilaDate";
 
 const pesoFormatter = new Intl.NumberFormat("en-PH", {
   style: "currency",
   currency: "PHP",
 });
 
+// Payment times are shown on the clinic's clock (Asia/Manila).
 const dateFormatter = new Intl.DateTimeFormat("en-PH", {
+  timeZone: CLINIC_TZ,
   year: "numeric",
   month: "short",
   day: "2-digit",
@@ -78,17 +81,14 @@ function formatPaidAt(value) {
   return date ? dateFormatter.format(date) : "Not recorded";
 }
 
+// "Today" / "this month" are the clinic's (Asia/Manila), not the device's.
+// `target` is a "YYYY-MM-DD" Manila date.
 function sameDay(date, target) {
-  return (
-    date &&
-    date.getFullYear() === target.getFullYear() &&
-    date.getMonth() === target.getMonth() &&
-    date.getDate() === target.getDate()
-  );
+  return Boolean(date) && manilaDateOf(date) === target;
 }
 
 function sameMonth(date, target) {
-  return date && date.getFullYear() === target.getFullYear() && date.getMonth() === target.getMonth();
+  return Boolean(date) && manilaDateOf(date).slice(0, 7) === target.slice(0, 7);
 }
 
 const EXPORT_COLUMNS = [
@@ -206,7 +206,7 @@ function AdminBilling() {
   );
 
   const summary = useMemo(() => {
-    const today = new Date();
+    const today = manilaToday();
     const stats = dashboard?.stats || dashboard || {};
     const paidTransactions = normalizedTransactions.filter((transaction) => transaction.status === "paid");
 

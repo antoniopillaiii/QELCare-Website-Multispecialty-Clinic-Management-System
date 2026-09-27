@@ -1,4 +1,5 @@
 const db = require("../../../config/database");
+const { manilaToday, addDays } = require("../../../shared/utils/manilaTime");
 
 const SELECT_FIELDS = `
   medication_id, patient_id, created_by, drug_name, dosage, form, instructions,
@@ -111,14 +112,13 @@ const PatientMedication = {
 
     const freq = clampFrequency(input.frequency_per_day);
     const times = normalizeTimes(input.times_of_day, freq);
-    const startDate = cleanDate(input.start_date) || new Date().toISOString().slice(0, 10);
+    // Defaults to the patient's current day in the clinic's time zone (Manila).
+    const startDate = cleanDate(input.start_date) || manilaToday();
 
     let endDate = cleanDate(input.end_date);
     let durationDays = Number.isFinite(parseInt(input.duration_days, 10)) ? parseInt(input.duration_days, 10) : null;
     if (!endDate && durationDays && durationDays > 0) {
-      const d = new Date(`${startDate}T00:00:00`);
-      d.setDate(d.getDate() + durationDays - 1);
-      endDate = d.toISOString().slice(0, 10);
+      endDate = addDays(startDate, durationDays - 1);
     }
 
     const source = ["manual", "ocr", "doctor"].includes(input.source) ? input.source : "manual";
@@ -237,7 +237,7 @@ const PatientMedication = {
   // merged with any existing log rows so the UI can show taken/skipped/pending.
   // --------------------------------------------------------------------------
   async getScheduleForDate(patientId, date) {
-    const day = cleanDate(date) || new Date().toISOString().slice(0, 10);
+    const day = cleanDate(date) || manilaToday();
 
     const medsResult = await db.query(
       `SELECT ${SELECT_FIELDS}
