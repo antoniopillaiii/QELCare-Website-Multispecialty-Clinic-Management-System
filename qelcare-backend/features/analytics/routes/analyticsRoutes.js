@@ -4,6 +4,9 @@ const router = express.Router();
 const { authenticate, authorize } = require("../../../shared/middleware/tokenMiddleware");
 const pool = require("../../../config/database");
 const { generateReport } = require("../services/geminiReportService");
+const Appointment = require("../../appointment/models/Appointment");
+const Queue = require("../../queue/models/Queue");
+const { MANILA_TODAY_SQL, manilaToday } = require("../../../shared/utils/manilaTime");
 
 router.use(authenticate, authorize(["Admin"]));
 
@@ -32,28 +35,30 @@ const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satu
 // RESCHEDULED is an active pre-visit status in the appointment model, so it counts.
 const EXCLUDED_APPOINTMENT_STATUSES = ["CANCELLED", "NO_SHOW"];
 
+// Calendar arithmetic on plain dates (UTC fields only, so the server's own time
+// zone can't shift a day). "Today" is the clinic's day in Asia/Manila.
 function toDateOnly(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
 function resolveDateRange(rangeKey) {
   const key = RANGE_CONFIG[rangeKey] ? rangeKey : "past_7_days";
   const config = RANGE_CONFIG[key];
-  const today = new Date();
-  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const [year, month, day] = manilaToday().split("-").map(Number);
+  const end = new Date(Date.UTC(year, month - 1, day));
   let start;
 
   if (config.mode === "this_month") {
-    start = new Date(today.getFullYear(), today.getMonth(), 1);
+    start = new Date(Date.UTC(year, month - 1, 1));
   } else if (config.mode === "last_month") {
-    start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-    end.setDate(0);
+    start = new Date(Date.UTC(year, month - 2, 1));
+    end.setUTCDate(0);
   } else {
     start = new Date(end);
-    start.setDate(start.getDate() - (config.days - 1));
+    start.setUTCDate(start.getUTCDate() - (config.days - 1));
   }
 
   return {
@@ -296,46 +301,29 @@ router.get("/ai-insights", aiInsightsLimiter, async (req, res) => {
 
 router.get("/dashboard", async (req, res) => {
   try {
-    const [metrics, weekly, deptToday, todayList] = await Promise.all([
-      pool.query(`
-        SELECT
-          -- "Appointments Today" = every appointment on today's date except the
-          -- lost ones (CANCELLED, NO_SHOW). RESCHEDULED is an active pre-visit
-          -- status in the appointment model (ACTIVE_VISIBLE_STATUSES), and
-          -- FOR_BILLING is a visit in progress, so both count. The 7-day chart,
-          -- Department Load and the dashboard's today list use this same rule.
-          (SELECT COUNT(*)
-           FROM appointments
-           WHERE date = CURRENT_DATE
-             AND status NOT IN ('CANCELLED','NO_SHOW')
-          )::int AS appointments_today,
-          (SELECT COUNT(*)
-           FROM appointments
-           WHERE date = CURRENT_DATE AND status = 'COMPLETED'
-          )::int AS completed_today,
-          (SELECT COUNT(*)
-           FROM queue_entries
-           WHERE queue_date = CURRENT_DATE
-             AND status IN ('WAITING','IN_PROGRESS')
-          )::int AS active_queue,
-          -- Count active PATIENT RECORDS, which is what the Patients module
-          -- shows. The dashboard used to count users with the Patient role
-          -- instead, and the two legitimately differ: a patient record can
-          -- exist with no login (added by admin/frontdesk), and clinic staff
-          -- can themselves be patients. Counting records keeps the dashboard
-          -- card consistent with the page it links to.
-          (SELECT COUNT(*)
-           FROM patients
-           WHERE is_active
-          )::int AS total_patients
-      `),
+    // "Today" is the clinic's day in Asia/Manila (the database runs on UTC).
+    // "Appointments Today" / "Completed Today" come from Appointment.todayCounts
+    // and "Active Queue" from Queue.liveCountToday — the same definitions the
+    // Appointment Management and Queue Management screens use.
+    const [today, activeQueue, patientsResult, weekly, deptToday, todayList] = await Promise.all([
+      Appointment.todayCounts(),
+      Queue.liveCountToday(),
+      // Count active PATIENT RECORDS, which is what the Patients module
+      // shows. The dashboard used to count users with the Patient role
+      // instead, and the two legitimately differ: a patient record can
+      // exist with no login (added by admin/frontdesk), and clinic staff
+      // can themselves be patients. Counting records keeps the dashboard
+      // card consistent with the page it links to.
+      pool.query(`SELECT COUNT(*)::int AS total_patients FROM patients WHERE is_active`),
+      // The 7-day chart, Department Load and the today list use the same
+      // "active = not CANCELLED / NO_SHOW" rule as "Appointments Today".
       pool.query(`
         SELECT
           TO_CHAR(d.day, 'Dy') AS label,
           COALESCE(COUNT(a.id), 0)::int AS value
         FROM generate_series(
-          CURRENT_DATE - INTERVAL '6 days',
-          CURRENT_DATE,
+          ${MANILA_TODAY_SQL} - INTERVAL '6 days',
+          ${MANILA_TODAY_SQL},
           '1 day'
         ) AS d(day)
         LEFT JOIN appointments a
@@ -350,7 +338,7 @@ router.get("/dashboard", async (req, res) => {
           COUNT(*)::int AS count
         FROM appointments a
         LEFT JOIN specialties s ON a.specialty_id = s.specialty_id
-        WHERE a.date = CURRENT_DATE
+        WHERE a.date = ${MANILA_TODAY_SQL}
           AND a.status NOT IN ('CANCELLED','NO_SHOW')
         GROUP BY s.specialty_name
         ORDER BY count DESC
@@ -370,7 +358,7 @@ router.get("/dashboard", async (req, res) => {
         LEFT JOIN specialties s ON a.specialty_id = s.specialty_id
         -- Every status, including FOR_BILLING and RESCHEDULED (previously left
         -- out), and no row cap, so the list always adds up to the card above.
-        WHERE a.date = CURRENT_DATE
+        WHERE a.date = ${MANILA_TODAY_SQL}
         ORDER BY a.time ASC
       `),
     ]);
@@ -379,10 +367,10 @@ router.get("/dashboard", async (req, res) => {
       success: true,
       data: {
         metrics: {
-          appointments_today: metrics.rows[0].appointments_today,
-          completed_today: metrics.rows[0].completed_today,
-          active_queue: metrics.rows[0].active_queue,
-          total_patients: metrics.rows[0].total_patients,
+          appointments_today: today.active,
+          completed_today: today.completed,
+          active_queue: activeQueue,
+          total_patients: patientsResult.rows[0].total_patients,
         },
         weekly: weekly.rows,
         dept_today: deptToday.rows,
@@ -418,13 +406,14 @@ router.get("/summary", async (req, res) => {
           COUNT(*) FILTER (WHERE status = 'CONFIRMED') AS confirmed,
           COUNT(*) FILTER (WHERE status = 'COMPLETED') AS completed,
           COUNT(*) FILTER (WHERE status = 'CANCELLED') AS cancelled,
-          COUNT(*) FILTER (WHERE date = CURRENT_DATE) AS today
+          COUNT(*) FILTER (WHERE date = ${MANILA_TODAY_SQL}) AS today
         FROM appointments`),
+      // Revenue days/months are the clinic's (Asia/Manila), same as Billing.
       pool.query(`
         SELECT
           COALESCE(SUM(total_amount) FILTER (WHERE status='PAID'), 0) AS total_revenue,
-          COALESCE(SUM(total_amount) FILTER (WHERE status='PAID' AND DATE(paid_at) = CURRENT_DATE), 0) AS today_revenue,
-          COALESCE(SUM(total_amount) FILTER (WHERE status='PAID' AND DATE_TRUNC('month',paid_at) = DATE_TRUNC('month',NOW())), 0) AS month_revenue,
+          COALESCE(SUM(total_amount) FILTER (WHERE status='PAID' AND (paid_at AT TIME ZONE 'Asia/Manila')::date = ${MANILA_TODAY_SQL}), 0) AS today_revenue,
+          COALESCE(SUM(total_amount) FILTER (WHERE status='PAID' AND DATE_TRUNC('month', paid_at AT TIME ZONE 'Asia/Manila') = DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Manila')), 0) AS month_revenue,
           COUNT(*) FILTER (WHERE status = 'PAID') AS paid_count
         FROM billing`),
     ]);
@@ -454,7 +443,7 @@ router.get("/appointments/monthly", async (req, res) => {
         COUNT(*) FILTER (WHERE status = 'COMPLETED') AS completed,
         COUNT(*) FILTER (WHERE status = 'CANCELLED') AS cancelled
       FROM appointments
-      WHERE date >= NOW() - INTERVAL '12 months'
+      WHERE date >= ${MANILA_TODAY_SQL} - INTERVAL '12 months'
       GROUP BY DATE_TRUNC('month', date)
       ORDER BY month_date ASC`);
     res.json({ success: true, data: result.rows });
@@ -486,15 +475,15 @@ router.get("/billing/monthly", async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT
-        TO_CHAR(DATE_TRUNC('month', paid_at), 'Mon YYYY') AS month,
-        DATE_TRUNC('month', paid_at) AS month_date,
+        TO_CHAR(DATE_TRUNC('month', paid_at AT TIME ZONE 'Asia/Manila'), 'Mon YYYY') AS month,
+        DATE_TRUNC('month', paid_at AT TIME ZONE 'Asia/Manila') AS month_date,
         COUNT(*) AS transactions,
         COALESCE(SUM(total_amount), 0) AS revenue,
         COALESCE(SUM(discount_amount), 0) AS total_discounts
       FROM billing
       WHERE status = 'PAID'
         AND paid_at >= NOW() - INTERVAL '12 months'
-      GROUP BY DATE_TRUNC('month', paid_at)
+      GROUP BY DATE_TRUNC('month', paid_at AT TIME ZONE 'Asia/Manila')
       ORDER BY month_date ASC`);
     res.json({ success: true, data: result.rows });
   } catch (err) {

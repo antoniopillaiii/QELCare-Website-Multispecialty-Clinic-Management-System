@@ -3,6 +3,16 @@ const router = express.Router();
 const ctrl = require("../controllers/appointmentController");
 const { authenticate, authorize } = require("../../../shared/middleware/tokenMiddleware");
 
+// Reject non-numeric / out-of-range ids with a 400 before any query runs.
+function requireIdParam(label) {
+  return (req, res, next, value) => {
+    if (/^[1-9]\d{0,9}$/.test(String(value)) && Number(value) <= 2147483647) return next();
+    return res.status(400).json({ success: false, message: `Invalid ${label} id.` });
+  };
+}
+router.param("id", requireIdParam("appointment"));
+router.param("doctorId", requireIdParam("doctor"));
+
 router.use(authenticate);
 
 router.get("/me", authorize(["Patient"]), ctrl.getMyAppointments);
@@ -14,6 +24,7 @@ router.patch("/:id/edit", authorize(["Patient"]), ctrl.editMine);
 
 router.post("/", authorize(["Admin", "Frontdesk"]), ctrl.create);
 router.get("/", authorize(["Admin", "Nurse", "Doctor", "Cashier", "Frontdesk"]), ctrl.getAll);
+router.get("/stats", authorize(["Admin", "Frontdesk"]), ctrl.getStats);
 router.get("/today/:doctorId?", authorize(["Admin", "Nurse", "Doctor", "Frontdesk"]), ctrl.getTodayByDoctor);
 
 // Bulk settle of long-past, unresolved appointments (Admin only).

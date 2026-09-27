@@ -2,12 +2,16 @@ const db = require("../../../config/database");
 
 const VALID_STATUSES = ["new", "in_progress", "resolved", "archived"];
 
+// preferred_date is a DATE: return it as "YYYY-MM-DD" text. Letting node-postgres
+// turn it into a JS Date shifts it by a day when the server isn't on UTC.
+const RETURN_COLUMNS = "*, TO_CHAR(preferred_date, 'YYYY-MM-DD') AS preferred_date";
+
 const Inquiry = {
   async create({ full_name, email, phone, subject, message, preferred_date }) {
     const result = await db.query(
       `INSERT INTO inquiries (full_name, email, phone, subject, message, preferred_date)
        VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING *`,
+       RETURNING ${RETURN_COLUMNS}`,
       [full_name, email || null, phone || null, subject || null, message, preferred_date || null]
     );
     return result.rows[0];
@@ -40,7 +44,8 @@ const Inquiry = {
     const dataParams = [...params, safeLimit, offset];
 
     const dataResult = await db.query(
-      `SELECT i.*, TRIM(CONCAT_WS(' ', u.first_name, u.last_name)) AS handled_by_name
+      `SELECT i.*, TO_CHAR(i.preferred_date, 'YYYY-MM-DD') AS preferred_date,
+              TRIM(CONCAT_WS(' ', u.first_name, u.last_name)) AS handled_by_name
        FROM inquiries i
        LEFT JOIN users u ON i.handled_by = u.user_id
        ${where}
@@ -72,7 +77,7 @@ const Inquiry = {
            handled_by = COALESCE($4, handled_by),
            updated_at = NOW()
        WHERE inquiry_id = $1
-       RETURNING *`,
+       RETURNING ${RETURN_COLUMNS}`,
       [id, status || null, admin_notes ?? null, handled_by || null]
     );
     return result.rows[0] || null;

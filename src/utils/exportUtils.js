@@ -29,6 +29,16 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+// Spreadsheet apps run a cell that starts with = + - @ (or a tab / carriage
+// return) as a formula — CSV injection when the text came from a public form.
+// Prefix such cells with an apostrophe so they open as plain text. Ordinary
+// signed numbers ("-5", "+63") can't be formulas and are left untouched.
+function neutralizeFormula(value) {
+  const text = String(value ?? "");
+  if (/^[=+\-@\t\r]/.test(text) && !/^[+-]?\d+(\.\d+)?$/.test(text)) return `'${text}`;
+  return text;
+}
+
 function csvCell(value) {
   return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }
@@ -77,7 +87,7 @@ export function exportToCsv(filenameBase, columns, rows) {
   const lines = [];
   lines.push(columns.map((column) => csvCell(column.header)).join(","));
   rows.forEach((row) => {
-    lines.push(columns.map((column) => csvCell(cellText(column, row))).join(","));
+    lines.push(columns.map((column) => csvCell(neutralizeFormula(cellText(column, row)))).join(","));
   });
   // Prepend a UTF-8 BOM so Excel renders accented characters correctly.
   downloadBlob(withStamp(filenameBase, "csv"), `﻿${lines.join("\r\n")}`, "text/csv;charset=utf-8");
@@ -116,8 +126,10 @@ export function exportToExcel(filenameBase, sheetTitle, columns, rows) {
 }
 
 // ── PDF (print window) ────────────────────────────────────────
-export function exportToPdf({ title, subtitle, columns, rows }) {
-  const popup = window.open("", "_blank", "width=1100,height=800");
+export function exportToPdf({ title, subtitle, columns, rows, popup: openedPopup }) {
+  // A caller that has to load rows first opens the window up front (while the
+  // click still counts as a user gesture) and passes it in.
+  const popup = openedPopup || window.open("", "_blank", "width=1100,height=800");
   if (!popup) {
     // Popup was blocked. Return false so the caller (ExportMenu) can surface an
     // in-app notice instead of a native window.alert.
@@ -192,11 +204,16 @@ export function ExportMenu({
   sheetTitle,
   columns = [],
   rows = [],
+  // Server-paginated pages pass loadRows (async, returns every matching row)
+  // and rowCount (the total), so the export isn't limited to the visible page.
+  loadRows,
+  rowCount,
   disabled = false,
   buttonLabel = "Download",
 }) {
   const [open, setOpen] = useState(false);
   const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
   const wrapRef = useRef(null);
 
   useEffect(() => {
@@ -221,18 +238,40 @@ export function ExportMenu({
     };
   }, [open]);
 
-  const isEmpty = !rows || rows.length === 0;
-  const blocked = disabled || isEmpty;
+  const count = typeof rowCount === "number" ? rowCount : (rows || []).length;
+  const isEmpty = count === 0;
+  const blocked = disabled || isEmpty || busy;
 
-  const run = (action) => {
+  const run = async (action) => {
     setOpen(false);
     if (blocked) return;
-    if (action === "pdf") {
-      const started = exportToPdf({ title, subtitle, columns, rows });
-      if (started === false) setNotice("Popup blocked. Please allow popups for this site, then try Download PDF again.");
+    if (!loadRows) {
+      if (action === "pdf") {
+        const started = exportToPdf({ title, subtitle, columns, rows });
+        if (started === false) setNotice("Popup blocked. Please allow popups for this site, then try Download PDF again.");
+      }
+      if (action === "excel") exportToExcel(filename, sheetTitle || title, columns, rows);
+      if (action === "csv") exportToCsv(filename, columns, rows);
+      return;
     }
-    if (action === "excel") exportToExcel(filename, sheetTitle || title, columns, rows);
-    if (action === "csv") exportToCsv(filename, columns, rows);
+
+    const popup = action === "pdf" ? window.open("", "_blank", "width=1100,height=800") : null;
+    if (action === "pdf" && !popup) {
+      setNotice("Popup blocked. Please allow popups for this site, then try Download PDF again.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const allRows = await loadRows();
+      if (action === "pdf") exportToPdf({ title, subtitle, columns, rows: allRows, popup });
+      if (action === "excel") exportToExcel(filename, sheetTitle || title, columns, allRows);
+      if (action === "csv") exportToCsv(filename, columns, allRows);
+    } catch (err) {
+      if (popup) popup.close();
+      setNotice(`Couldn't prepare the download: ${err.message || "please try again."}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const items = [
@@ -247,7 +286,7 @@ export function ExportMenu({
         type="button"
         onClick={() => !blocked && setOpen((value) => !value)}
         disabled={blocked}
-        title={isEmpty ? "No rows to export" : `Download ${rows.length} row${rows.length === 1 ? "" : "s"}`}
+        title={isEmpty ? "No rows to export" : busy ? "Preparing download..." : `Download ${count} row${count === 1 ? "" : "s"}`}
         style={{
           height: 38,
           padding: "0 14px",
@@ -271,7 +310,7 @@ export function ExportMenu({
           <polyline points="7 10 12 15 17 10" />
           <line x1="12" y1="15" x2="12" y2="3" />
         </svg>
-        {buttonLabel}
+        {busy ? "Preparing..." : buttonLabel}
         <span style={{ fontSize: 10, opacity: 0.7 }}>{open ? "▲" : "▼"}</span>
       </button>
 

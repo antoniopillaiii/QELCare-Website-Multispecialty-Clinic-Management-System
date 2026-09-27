@@ -75,15 +75,6 @@ function compareAppointments(a, b) {
   return Number(b.id || 0) - Number(a.id || 0);
 }
 
-function appointmentDate(item) {
-  return String(item.date || "").slice(0, 10);
-}
-
-function isToday(item) {
-  const date = appointmentDate(item);
-  return Boolean(date && date === todayISO());
-}
-
 function isPastDateTime(date, time) {
   if (!date || !time) return false;
   return `${date}T${String(time).slice(0, 5)}` <= manilaNowKey();
@@ -382,7 +373,9 @@ export default function AppointmentList() {
                               {item.status === "PENDING" && <ActionButton disabled={savingId === item.id} tone="success" onClick={() => changeStatus(item, "CONFIRMED")}>Confirm</ActionButton>}
                               {["PENDING", "CONFIRMED", "RESCHEDULED"].includes(item.status) && <ActionButton disabled={savingId === item.id} tone="secondary" onClick={() => setReschedule({ id: item.id, patient_name: item.patient_name, date: item.date || todayISO(), time: item.time || "" })}>Reschedule</ActionButton>}
                               {["PENDING", "CONFIRMED", "RESCHEDULED"].includes(item.status) && <ActionButton disabled={savingId === item.id} tone="danger" onClick={() => setCancelTarget(item)}>Cancel</ActionButton>}
-                              {["CONFIRMED", "IN_QUEUE"].includes(item.status) && isToday(item) && <ActionButton disabled={savingId === item.id} tone="warning" onClick={() => changeStatus(item, "NO_SHOW")}>No Show</ActionButton>}
+                              {/* No Show isn't offered on upcoming rows: the server only allows it
+                                  after the scheduled time, and in-queue patients are no-showed
+                                  from the queue. */}
                             </div>
                           </div>
                         ) : (

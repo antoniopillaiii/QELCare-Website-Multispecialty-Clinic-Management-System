@@ -222,8 +222,9 @@ export default function AdminDashboard() {
     statusFilter
   );
 
+  // The clinic's day (Asia/Manila), matching the "today" the counts use.
   const today = new Date().toLocaleDateString("en-PH", {
-    weekday: "long", year: "numeric", month: "long", day: "numeric",
+    timeZone: "Asia/Manila", weekday: "long", year: "numeric", month: "long", day: "numeric",
   });
   // Each card deep-links to its module. "today" is resolved to the current
   // Manila date by the Appointments page, which reads ?date / ?status.
@@ -271,7 +272,7 @@ export default function AdminDashboard() {
           }}
         >
           <span style={{ display: "grid", placeItems: "center", color: C.blue }}>{IC.refresh}</span>
-          {loadingDash ? "Refreshing..." : lastRefresh ? `Refreshed ${lastRefresh.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" })}` : "Refresh"}
+          {loadingDash ? "Refreshing..." : lastRefresh ? `Refreshed ${lastRefresh.toLocaleTimeString("en-PH", { timeZone: "Asia/Manila", hour: "2-digit", minute: "2-digit" })}` : "Refresh"}
         </button>
       </div>
 

@@ -6,8 +6,10 @@ require("dotenv").config();
 
 const tokenManager = require("./shared/utils/tokenManager");
 const Appointment = require("./features/appointment/models/Appointment");
+const Queue = require("./features/queue/models/Queue");
 const DeviceToken = require("./features/notification/models/DeviceToken");
 const { sweepStaleQueue } = require("./shared/utils/queueSweep");
+const { manilaToday } = require("./shared/utils/manilaTime");
 
 const app = express();
 
@@ -205,24 +207,32 @@ setInterval(async () => {
   }
 }, 60 * 60 * 1000);
 
-// Auto-settle past, unresolved appointments so none sit stuck as PENDING.
-// Runs shortly after boot, then hourly. Grace period = 120 min after the slot.
-async function runAppointmentSweep() {
+// Clinic lifecycle job — the only place that settles or enqueues on a clock
+// (reading appointments or the queue never changes anything). Runs shortly
+// after boot, then every 5 minutes:
+//   1. auto-settle past, unresolved appointments (grace: 120 min after the slot),
+//   2. resolve stale live-queue entries (past days, skipped > 30 min, still
+//      waiting after the 8 PM close) and notify those patients,
+//   3. enqueue TODAY's (Asia/Manila) confirmed appointments that aren't queued
+//      yet. Future dates are never enqueued early.
+async function runClinicLifecycle() {
   try {
     const result = await Appointment.autoSettlePastAppointments({ graceMinutes: 120 });
     if (result.settled > 0) {
       console.log(`Appointment sweep: settled ${result.settled} past appointment(s) to NO_SHOW.`);
     }
-    // Also resolve stale live-queue entries (past-day leftovers + skipped
-    // no-shows) that a slot-based sweep can't see, and notify those patients.
     const queueResult = await sweepStaleQueue({ skipGraceMinutes: 30, clinicCloseHour: 20 });
     if (queueResult.appointments.length > 0) {
       console.log(`Queue sweep: no-showed ${queueResult.appointments.length} stale queued appointment(s).`);
     }
+    const enqueued = await Queue.autoEnqueueConfirmed(manilaToday());
+    if (enqueued.added_count > 0 || enqueued.failed_count > 0) {
+      console.log(`Queue enqueue: added ${enqueued.added_count}, failed ${enqueued.failed_count} of today's confirmed appointment(s).`);
+    }
   } catch (err) {
-    console.error("Appointment sweep error:", err.message);
+    console.error("Clinic lifecycle job error:", err.message);
   }
 }
 
-setTimeout(runAppointmentSweep, 15 * 1000);
-setInterval(runAppointmentSweep, 60 * 60 * 1000);
+setTimeout(runClinicLifecycle, 15 * 1000);
+setInterval(runClinicLifecycle, 5 * 60 * 1000);

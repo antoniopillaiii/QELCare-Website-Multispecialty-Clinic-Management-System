@@ -5,6 +5,16 @@ const { authenticate, authorize } = require("../../../shared/middleware/tokenMid
 
 router.get("/display", ctrl.getDisplay);
 
+// Reject non-numeric / out-of-range ids with a 400 before any query runs.
+function requireIdParam(label) {
+  return (req, res, next, value) => {
+    if (/^[1-9]\d{0,9}$/.test(String(value)) && Number(value) <= 2147483647) return next();
+    return res.status(400).json({ success: false, message: `Invalid ${label} id.` });
+  };
+}
+router.param("queueId", requireIdParam("queue"));
+router.param("specialtyId", requireIdParam("specialty"));
+
 router.use(authenticate);
 
 router.get(

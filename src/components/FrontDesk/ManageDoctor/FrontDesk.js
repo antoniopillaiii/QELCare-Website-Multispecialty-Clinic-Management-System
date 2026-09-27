@@ -150,7 +150,8 @@ export default function FrontDesk() {
                         {["PENDING", "CONFIRMED", "RESCHEDULED"].includes(item.status) && (
                           <ActionButton disabled={savingId === item.id} tone="danger" onClick={() => setCancelTarget(item)}>Cancel</ActionButton>
                         )}
-                        {item.status === "CONFIRMED" && isToday && (
+                        {/* No Show only once the scheduled time has passed (server rule). */}
+                        {item.status === "CONFIRMED" && item.is_past === true && (
                           <ActionButton disabled={savingId === item.id} tone="warning" onClick={() => updateStatus(item, "NO_SHOW")}>No Show</ActionButton>
                         )}
                       </div>

@@ -74,10 +74,12 @@ function formatTime(value) {
   return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`;
 }
 
+// Clock times are shown in the clinic's time zone, whatever the browser's is.
 function formatDateTime(value) {
   if (!value) return "-";
   try {
     return new Date(value).toLocaleTimeString("en-PH", {
+      timeZone: "Asia/Manila",
       hour: "2-digit",
       minute: "2-digit",
     });
@@ -85,6 +87,21 @@ function formatDateTime(value) {
     return "-";
   }
 }
+
+// A queue row can only be worked while its appointment is still In Queue.
+function isServiceable(entry) {
+  return !entry.appointment_status || entry.appointment_status === "IN_QUEUE";
+}
+
+const APPOINTMENT_STATUS_LABEL = {
+  CANCELLED: "cancelled",
+  NO_SHOW: "a no-show",
+  FOR_BILLING: "awaiting payment",
+  COMPLETED: "completed",
+  PENDING: "pending",
+  CONFIRMED: "confirmed",
+  RESCHEDULED: "rescheduled",
+};
 
 function initials(name) {
   const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
@@ -267,6 +284,7 @@ export default function AdminQueue() {
   const [loadingQueue, setLoadingQueue] = useState(false);
   const [workingId, setWorkingId] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [queueError, setQueueError] = useState("");
   const [lastRefresh, setLastRefresh] = useState(null);
   const refreshTimer = useRef(null);
 
@@ -276,23 +294,24 @@ export default function AdminQueue() {
   );
 
   const stats = useMemo(() => {
+    const live = queue.filter(isServiceable);
     return {
-      waiting: queue.filter((q) => q.status === "WAITING").length,
-      called: queue.filter((q) => q.status === "CALLED").length,
-      inProgress: queue.filter((q) => q.status === "IN_PROGRESS").length,
-      skipped: queue.filter((q) => q.status === "SKIPPED").length,
+      waiting: live.filter((q) => q.status === "WAITING").length,
+      called: live.filter((q) => q.status === "CALLED").length,
+      inProgress: live.filter((q) => q.status === "IN_PROGRESS").length,
+      skipped: live.filter((q) => q.status === "SKIPPED").length,
       done: queue.filter((q) => q.status === "DONE").length,
       noShow: queue.filter((q) => q.status === "NO_SHOW").length,
     };
   }, [queue]);
 
   const nowServing = useMemo(
-    () => queue.find((q) => q.status === "IN_PROGRESS") || null,
+    () => queue.find((q) => q.status === "IN_PROGRESS" && isServiceable(q)) || null,
     [queue]
   );
 
   const nextWaiting = useMemo(
-    () => queue.find((q) => q.status === "WAITING") || null,
+    () => queue.find((q) => q.status === "WAITING" && isServiceable(q)) || null,
     [queue]
   );
 
@@ -344,9 +363,11 @@ export default function AdminQueue() {
         }
 
         setQueue(data.data || data.queue || []);
+        setQueueError("");
         setLastRefresh(new Date());
       } catch (err) {
         showNotice(err.message, "error");
+        setQueueError(err.message || "Failed to load queue.");
         setQueue([]);
       } finally {
         setLoadingQueue(false);
@@ -391,22 +412,19 @@ export default function AdminQueue() {
         throw new Error(data.message || "Failed to update queue status.");
       }
 
-      const updated = data.data || data.queue_entry;
-      if (updated?.queue_id) {
-        setQueue((prev) => prev.map((q) => (q.queue_id === updated.queue_id ? updated : q)));
-      }
-
-      showNotice(`Queue updated to ${STATUS_META[status]?.label || status}.`);
-      await loadSpecialties();
-      await loadQueue(activeSpecialtyId);
+      showNotice(data.unchanged ? data.message : `Queue updated to ${STATUS_META[status]?.label || status}.`);
     } catch (err) {
       showNotice(err.message, "error");
     } finally {
+      // Reload either way: after a rejected action this row was out of date.
+      await loadSpecialties();
+      await loadQueue(activeSpecialtyId);
       setWorkingId(null);
     }
   }
 
   const isToday = date === todayISO();
+  const isFuture = date > todayISO();
 
   return (
     <MainLayout>
@@ -766,10 +784,17 @@ export default function AdminQueue() {
             title="No active specialties"
             body="Add or activate specialties before using the queue."
           />
+        ) : queueError ? (
+          <EmptyState
+            title="Queue could not be loaded"
+            body={`${queueError} Use Refresh to try again.`}
+          />
         ) : queue.length === 0 ? (
           <EmptyState
             title="No queue entries"
-            body="Queue entries appear here after Frontdesk/Admin approves same-day appointments."
+            body={isFuture
+              ? "Patients join the queue on their appointment day, not before."
+              : "Queue entries appear here after Frontdesk/Admin approves same-day appointments."}
           />
         ) : (
           <div style={{ overflowX: "auto" }}>
@@ -869,7 +894,13 @@ export default function AdminQueue() {
                       </td>
                       <td data-label="Actions" className="qc-td-block" style={{ padding: "13px 14px" }}>
                         <div className="qc-actions" style={{ display: "flex", gap: 7 }}>
-                          {entry.status === "WAITING" && (
+                          {!isServiceable(entry) && !["DONE", "NO_SHOW", "CANCELLED"].includes(entry.status) && (
+                            <span style={{ color: COLORS.red, fontSize: 12, fontWeight: 900 }}>
+                              Appointment is {APPOINTMENT_STATUS_LABEL[entry.appointment_status] || String(entry.appointment_status).toLowerCase()}; not in queue
+                            </span>
+                          )}
+
+                          {isServiceable(entry) && entry.status === "WAITING" && (
                             <>
                               <ActionButton
                                 label="Call"
@@ -888,7 +919,7 @@ export default function AdminQueue() {
                             </>
                           )}
 
-                          {entry.status === "CALLED" && (
+                          {isServiceable(entry) && entry.status === "CALLED" && (
                             <>
                               <ActionButton
                                 label="Start"
@@ -914,26 +945,17 @@ export default function AdminQueue() {
                             </>
                           )}
 
-                          {entry.status === "IN_PROGRESS" && (
-                            <>
-                              <ActionButton
-                                label="Done"
-                                icon="check"
-                                tone="green"
-                                disabled={disabled}
-                                onClick={() => updateQueueStatus(entry.queue_id, "DONE")}
-                              />
-                              <ActionButton
-                                label="No Show"
-                                icon="skip"
-                                tone="gray"
-                                disabled={disabled}
-                                onClick={() => updateQueueStatus(entry.queue_id, "NO_SHOW")}
-                              />
-                            </>
+                          {isServiceable(entry) && entry.status === "IN_PROGRESS" && (
+                            <ActionButton
+                              label="Done"
+                              icon="check"
+                              tone="green"
+                              disabled={disabled}
+                              onClick={() => updateQueueStatus(entry.queue_id, "DONE")}
+                            />
                           )}
 
-                          {entry.status === "SKIPPED" && (
+                          {isServiceable(entry) && entry.status === "SKIPPED" && (
                             <>
                               <ActionButton
                                 label="Recall"
@@ -1002,7 +1024,9 @@ export default function AdminQueue() {
             fontWeight: 800,
           }}
         >
-          Historical queue dates are read-only. Switch back to today to update queue status.
+          {isFuture
+            ? "Future queue dates are read-only. Patients join the queue on their appointment day."
+            : "Historical queue dates are read-only. Switch back to today to update queue status."}
         </div>
       )}
     </MainLayout>

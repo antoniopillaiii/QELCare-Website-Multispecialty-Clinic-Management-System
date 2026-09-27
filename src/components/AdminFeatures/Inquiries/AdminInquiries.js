@@ -25,9 +25,21 @@ const STATUS_ORDER = ["new", "in_progress", "resolved", "archived"];
 const FILTERS = [{ id: "", label: "All" }, ...STATUS_ORDER.map((s) => ({ id: s, label: STATUS_META[s].label }))];
 const PAGE_SIZE = 10;
 
+// Timestamps are shown in the clinic's time zone, whatever the browser's is.
+function formatReceived(value, withYear = false) {
+  return new Date(value).toLocaleString("en-PH", {
+    timeZone: "Asia/Manila",
+    month: "short",
+    day: "numeric",
+    ...(withYear ? { year: "numeric" } : {}),
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 const EXPORT_COLUMNS = [
   { header: "ID", value: (r) => `#${r.inquiry_id}` },
-  { header: "Date", value: (r) => new Date(r.created_at).toLocaleString("en-PH") },
+  { header: "Date", value: (r) => formatReceived(r.created_at, true) },
   { header: "Name", value: (r) => r.full_name || "" },
   { header: "Email", value: (r) => r.email || "" },
   { header: "Phone", value: (r) => r.phone || "" },
@@ -61,6 +73,7 @@ export default function AdminInquiries() {
   const [active, setActive] = useState(null); // inquiry being viewed/edited
   const [draft, setDraft] = useState({ status: "new", admin_notes: "" });
   const [saving, setSaving] = useState(false);
+  const [modalError, setModalError] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -90,27 +103,51 @@ export default function AdminInquiries() {
     setActive(item);
     setDraft({ status: item.status, admin_notes: item.admin_notes || "" });
     setMsg("");
+    setModalError("");
   }
 
+  // Errors while saving stay inside the open dialog (the page behind it is
+  // covered), and the dialog stays open so the edit isn't lost.
   async function saveInquiry() {
     setSaving(true);
-    setError("");
+    setModalError("");
     try {
       const res = await authFetch(`/inquiries/${active.inquiry_id}`, {
         method: "PATCH",
         body: JSON.stringify({ status: draft.status, admin_notes: draft.admin_notes }),
       });
-      const payload = await res.json();
+      if (!res) throw new Error("Your session has ended. Please sign in again.");
+      const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.message || "Failed to update inquiry.");
       setMsg("Inquiry updated.");
       setActive(null);
       await load();
     } catch (err) {
-      setError(err.message);
+      const offline = err instanceof TypeError;
+      setModalError(offline
+        ? "Couldn't reach the server. Check the connection and press Save again."
+        : `${err.message || "Failed to update inquiry."} Your changes are still here; press Save to try again.`);
     } finally {
       setSaving(false);
     }
   }
+
+  // Every inquiry matching the current filter/search, for the export menu.
+  const loadAllRows = useCallback(async () => {
+    const all = [];
+    for (let p = 1; p <= 1000; p += 1) {
+      const params = new URLSearchParams({ page: String(p), limit: "100" });
+      if (status) params.set("status", status);
+      if (query) params.set("search", query);
+      const res = await authFetch(`/inquiries?${params.toString()}`);
+      if (!res) throw new Error("Your session has ended.");
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.message || "Failed to load inquiries.");
+      all.push(...(payload.inquiries || payload.data || []));
+      if (p >= (payload.pages || 1)) break;
+    }
+    return all;
+  }, [status, query]);
 
   const runSearch = () => { setPage(1); setQuery(search.trim()); };
 
@@ -127,7 +164,7 @@ export default function AdminInquiries() {
             </div>
           )}
         </div>
-        <ExportMenu filename="qelcare-inquiries" title="QELCare Inquiries" subtitle={`${total} total`} columns={EXPORT_COLUMNS} rows={rows} />
+        <ExportMenu filename="qelcare-inquiries" title="QELCare Inquiries" subtitle={`${total} inquir${total === 1 ? "y" : "ies"}${status ? ` (${STATUS_META[status].label})` : ""}${query ? ` matching "${query}"` : ""}`} columns={EXPORT_COLUMNS} rows={rows} rowCount={total} loadRows={loadAllRows} disabled={loading} />
       </div>
 
       {/* Filters + search */}
@@ -185,7 +222,7 @@ export default function AdminInquiries() {
                 {rows.map((item) => (
                   <tr key={item.inquiry_id} style={{ borderTop: `1px solid ${BORDER}` }}>
                     <td data-label="ID" style={{ padding: "11px 14px", color: MUTED, fontWeight: 800 }}>#{item.inquiry_id}</td>
-                    <td data-label="Received" style={{ padding: "11px 14px", whiteSpace: "nowrap" }}>{new Date(item.created_at).toLocaleDateString("en-PH", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td>
+                    <td data-label="Received" style={{ padding: "11px 14px", whiteSpace: "nowrap" }}>{formatReceived(item.created_at)}</td>
                     <td data-label="Name" style={{ padding: "11px 14px", fontWeight: 800, color: NAVY }}>{item.full_name}</td>
                     <td data-label="Contact" style={{ padding: "11px 14px", color: MUTED }}>
                       <div>{item.email || "-"}</div>
@@ -229,6 +266,11 @@ export default function AdminInquiries() {
               <button onClick={() => setActive(null)} aria-label="Close" style={{ border: 0, background: BG, color: NAVY, width: 34, height: 34, borderRadius: 10, cursor: "pointer", display: "grid", placeItems: "center" }}><X size={18} /></button>
             </div>
             <div style={{ padding: "16px 20px 22px", display: "grid", gap: 12 }}>
+              {modalError && (
+                <div role="alert" style={{ padding: "10px 12px", borderRadius: 8, background: "#fff0f0", color: "#ad3131", border: "1px solid #f3c4c4", fontWeight: 800, fontSize: 13 }}>
+                  {modalError}
+                </div>
+              )}
               <Detail label="From" value={active.full_name} />
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <Detail label="Email" value={active.email || "-"} />

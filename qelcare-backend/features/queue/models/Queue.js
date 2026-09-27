@@ -1,22 +1,30 @@
 const db = require("../../../config/database");
+const { MANILA_TODAY_SQL, manilaToday } = require("../../../shared/utils/manilaTime");
 
 const VALID_QUEUE_STATUSES = ["WAITING", "CALLED", "IN_PROGRESS", "DONE", "SKIPPED", "NO_SHOW", "CANCELLED"];
 const FINAL_QUEUE_STATUSES = ["DONE", "NO_SHOW", "CANCELLED"];
+// The live queue: patients in line or being served. The single definition used
+// by the queue screens, the public waiting-room display and the Dashboard's
+// "Active Queue" card. SKIPPED is on hold (recall or auto no-show), not in line.
+const LIVE_QUEUE_STATUSES = ["WAITING", "CALLED", "IN_PROGRESS"];
+
+// Allowed queue moves (server-enforced; the buttons only mirror these).
+//  - WAITING -> IN_PROGRESS is the nurse "vitals recorded, ready for doctor" and
+//    the doctor "start consultation" step, so it doesn't require CALLED first.
+//  - NO_SHOW only for a patient who was called or skipped and didn't come;
+//    never for someone waiting their turn or already being served.
+const QUEUE_TRANSITIONS = {
+  WAITING: ["CALLED", "IN_PROGRESS", "SKIPPED", "CANCELLED"],
+  CALLED: ["WAITING", "IN_PROGRESS", "SKIPPED", "NO_SHOW", "CANCELLED"],
+  IN_PROGRESS: ["DONE", "CANCELLED"],
+  SKIPPED: ["WAITING", "NO_SHOW", "CANCELLED"],
+  DONE: [],
+  NO_SHOW: [],
+  CANCELLED: [],
+};
 
 function normalizeStatus(status) {
   return String(status || "").trim().toUpperCase();
-}
-
-function todayISO() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
 }
 
 function appError(statusCode, message) {
@@ -76,9 +84,10 @@ const Queue = {
     return findEntryById(queueId);
   },
 
-  async getSpecialties(date = todayISO()) {
-    const targetDate = date || todayISO();
-    await this.autoEnqueueConfirmed(targetDate);
+  // Read-only. Counts only include live entries whose appointment is still in
+  // the queue, so a stale row can never inflate "waiting"/"active".
+  async getSpecialties(date = manilaToday()) {
+    const targetDate = date || manilaToday();
 
     const result = await db.query(
       `SELECT
@@ -88,10 +97,10 @@ const Queue = {
          s.display_order,
          s.is_active,
          COUNT(q.queue_id)::int AS total,
-         COUNT(q.queue_id) FILTER (WHERE q.status = 'WAITING')::int AS waiting,
-         COUNT(q.queue_id) FILTER (WHERE q.status IN ('CALLED', 'IN_PROGRESS'))::int AS in_progress,
-         COUNT(q.queue_id) FILTER (WHERE q.status = 'CALLED')::int AS called,
-         COUNT(q.queue_id) FILTER (WHERE q.status = 'SKIPPED')::int AS skipped,
+         COUNT(q.queue_id) FILTER (WHERE q.status = 'WAITING' AND a.status = 'IN_QUEUE')::int AS waiting,
+         COUNT(q.queue_id) FILTER (WHERE q.status IN ('CALLED', 'IN_PROGRESS') AND a.status = 'IN_QUEUE')::int AS in_progress,
+         COUNT(q.queue_id) FILTER (WHERE q.status = 'CALLED' AND a.status = 'IN_QUEUE')::int AS called,
+         COUNT(q.queue_id) FILTER (WHERE q.status = 'SKIPPED' AND a.status = 'IN_QUEUE')::int AS skipped,
          COUNT(q.queue_id) FILTER (WHERE q.status = 'DONE')::int AS done,
          COUNT(q.queue_id) FILTER (WHERE q.status = 'NO_SHOW')::int AS no_show,
          COUNT(q.queue_id) FILTER (WHERE q.status = 'CANCELLED')::int AS cancelled
@@ -99,6 +108,7 @@ const Queue = {
        LEFT JOIN queue_entries q
          ON q.specialty_id = s.specialty_id
         AND q.queue_date = $1::date
+       LEFT JOIN appointments a ON a.id = q.appointment_id
        WHERE COALESCE(s.is_active, true) = true
        GROUP BY s.specialty_id, s.specialty_name, s.slug, s.display_order, s.is_active
        ORDER BY COALESCE(s.display_order, 0), s.specialty_name`,
@@ -108,9 +118,9 @@ const Queue = {
     return result.rows;
   },
 
-  async findBySpecialtyAndDate(specialtyId, date = todayISO()) {
-    const targetDate = date || todayISO();
-    await this.autoEnqueueConfirmed(targetDate);
+  // Read-only.
+  async findBySpecialtyAndDate(specialtyId, date = manilaToday()) {
+    const targetDate = date || manilaToday();
 
     const result = await db.query(
       `SELECT
@@ -170,50 +180,48 @@ const Queue = {
     return result.rows;
   },
 
-  async addToQueue(appointmentId) {
-    const client = await db.connect();
-
-    try {
-      await client.query("BEGIN");
-
-      const apptResult = await client.query(
-        `SELECT id, specialty_id, date, status
+  // --------------------------------------------------------------------------
+  // addToQueue
+  //   Put a CONFIRMED appointment for TODAY (Manila) into its specialty's queue
+  //   and move it to IN_QUEUE. Pass { client } to run inside the caller's
+  //   transaction (confirm / check-in), so the appointment status and the queue
+  //   entry commit or roll back together. An IN_QUEUE appointment without a
+  //   queue entry (left by an older failed check-in) gets its entry here too.
+  // --------------------------------------------------------------------------
+  async addToQueue(appointmentId, { client: outer } = {}) {
+    const run = async (client) => {
+      const appointment = (await client.query(
+        `SELECT id, specialty_id, TO_CHAR(date, 'YYYY-MM-DD') AS date, status
          FROM appointments
          WHERE id = $1::integer
          FOR UPDATE`,
         [appointmentId]
-      );
+      )).rows[0];
 
-      const appointment = apptResult.rows[0];
       if (!appointment) throw appError(404, "Appointment not found.");
-      if (!appointment.specialty_id) throw appError(400, "Appointment has no specialty assigned.");
 
-      const existing = await client.query(
+      const existing = (await client.query(
         `SELECT queue_id, status
          FROM queue_entries
          WHERE appointment_id = $1::integer
          LIMIT 1`,
         [appointmentId]
-      );
+      )).rows[0];
 
-      if (existing.rows[0]) {
-        if (!FINAL_QUEUE_STATUSES.includes(existing.rows[0].status) && appointment.status !== "IN_QUEUE") {
-          await client.query(
-            `UPDATE appointments
-             SET status = 'IN_QUEUE', updated_at = NOW()
-             WHERE id = $1::integer`,
-            [appointmentId]
-          );
+      if (existing) {
+        if (appointment.status === "IN_QUEUE" && !FINAL_QUEUE_STATUSES.includes(existing.status)) {
+          return { queue_id: existing.queue_id, alreadyQueued: true };
         }
-
-        await client.query("COMMIT");
-        const entry = await findEntryById(existing.rows[0].queue_id);
-        return { ...entry, alreadyQueued: true };
+        throw appError(409, "This appointment already has a queue record and can't be queued again.");
       }
 
       if (!["CONFIRMED", "IN_QUEUE"].includes(appointment.status)) {
         throw appError(400, "Only approved appointments can be added to the queue.");
       }
+      if (appointment.date !== manilaToday()) {
+        throw appError(400, "Only today's appointments can enter the live queue.");
+      }
+      if (!appointment.specialty_id) throw appError(400, "Appointment has no specialty assigned.");
 
       await client.query("LOCK TABLE queue_entries IN SHARE ROW EXCLUSIVE MODE");
 
@@ -238,20 +246,42 @@ const Queue = {
       await client.query(
         `UPDATE appointments
          SET status = 'IN_QUEUE', updated_at = NOW()
-         WHERE id = $1::integer`,
+         WHERE id = $1::integer AND status IN ('CONFIRMED', 'IN_QUEUE')`,
         [appointmentId]
       );
 
+      return { queue_id: insertResult.rows[0].queue_id, queue_number: queueNumber, alreadyQueued: false };
+    };
+
+    if (outer) return run(outer);
+
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      const added = await run(client);
       await client.query("COMMIT");
-      return findEntryById(insertResult.rows[0].queue_id);
+      const entry = await findEntryById(added.queue_id);
+      return { ...entry, alreadyQueued: added.alreadyQueued };
     } catch (err) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       throw err;
     } finally {
       client.release();
     }
   },
 
+  // --------------------------------------------------------------------------
+  // updateStatus
+  //   One transaction that locks the queue entry AND its appointment, then:
+  //     - repeating the current status is a no-op (nothing is rewritten, so a
+  //       double-clicked Done can never touch a paid visit again);
+  //     - finished entries (DONE / NO_SHOW / CANCELLED) can't change;
+  //     - only QUEUE_TRANSITIONS moves are allowed;
+  //     - only today's (Manila) queue can be worked;
+  //     - the appointment must still be IN_QUEUE, so a cancelled/no-show/paid
+  //       appointment is never revived by an old queue row.
+  //   Returns { entry, unchanged }.
+  // --------------------------------------------------------------------------
   async updateStatus(queueId, status, notes = null) {
     const nextStatus = normalizeStatus(status);
     if (!VALID_QUEUE_STATUSES.includes(nextStatus)) {
@@ -263,25 +293,40 @@ const Queue = {
     try {
       await client.query("BEGIN");
 
-      const currentResult = await client.query(
-        `SELECT queue_id, appointment_id, status
-         FROM queue_entries
-         WHERE queue_id = $1::integer
-         FOR UPDATE`,
+      const current = (await client.query(
+        `SELECT q.queue_id, q.appointment_id, q.status, TO_CHAR(q.queue_date, 'YYYY-MM-DD') AS queue_date,
+                a.status AS appointment_status
+           FROM queue_entries q
+           JOIN appointments a ON a.id = q.appointment_id
+          WHERE q.queue_id = $1::integer
+          FOR UPDATE OF q, a`,
         [queueId]
-      );
+      )).rows[0];
 
-      const current = currentResult.rows[0];
       if (!current) {
         await client.query("ROLLBACK");
         return null;
       }
 
-      if (FINAL_QUEUE_STATUSES.includes(current.status) && nextStatus !== current.status) {
-        throw appError(400, "Final queue entries cannot be reopened.");
+      if (current.status === nextStatus) {
+        await client.query("COMMIT");
+        return { entry: await findEntryById(queueId), unchanged: true };
       }
 
-      const updateResult = await client.query(
+      if (FINAL_QUEUE_STATUSES.includes(current.status)) {
+        throw appError(400, "Final queue entries cannot be reopened.");
+      }
+      if (!(QUEUE_TRANSITIONS[current.status] || []).includes(nextStatus)) {
+        throw appError(400, `Cannot change a queue entry from ${current.status} to ${nextStatus}.`);
+      }
+      if (current.queue_date !== manilaToday()) {
+        throw appError(400, "Only today's queue can be updated.");
+      }
+      if (current.appointment_status !== "IN_QUEUE") {
+        throw appError(409, `This patient's appointment is ${current.appointment_status.replace("_", " ").toLowerCase()}, so the queue entry can no longer be served.`);
+      }
+
+      await client.query(
         `UPDATE queue_entries
          SET status = $1::varchar,
              notes = COALESCE($2::text, notes),
@@ -301,35 +346,46 @@ const Queue = {
                ELSE completed_at
              END,
              updated_at = NOW()
-         WHERE queue_id = $3::integer
-         RETURNING queue_id`,
+         WHERE queue_id = $3::integer`,
         [nextStatus, notes || null, queueId]
       );
 
+      // The appointment only changes when the visit leaves the queue; while the
+      // patient is waiting/called/being served it stays IN_QUEUE.
       const appointmentStatus =
         nextStatus === "DONE" ? "FOR_BILLING" : // consultation finished -> awaiting cashier payment
         nextStatus === "NO_SHOW" ? "NO_SHOW" :
         nextStatus === "CANCELLED" ? "CANCELLED" :
-        "IN_QUEUE";
+        null;
 
-      await client.query(
-        `UPDATE appointments
-         SET status = $1::varchar, updated_at = NOW()
-         WHERE id = $2::integer`,
-        [appointmentStatus, current.appointment_id]
-      );
+      if (appointmentStatus) {
+        await client.query(
+          `UPDATE appointments
+           SET status = $1::varchar, updated_at = NOW()
+           WHERE id = $2::integer AND status = 'IN_QUEUE'`,
+          [appointmentStatus, current.appointment_id]
+        );
+      }
 
       await client.query("COMMIT");
-      return findEntryById(updateResult.rows[0].queue_id);
+      return { entry: await findEntryById(queueId), unchanged: false };
     } catch (err) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       throw err;
     } finally {
       client.release();
     }
   },
 
-  async autoEnqueueConfirmed(date = todayISO()) {
+  // Enqueue today's (Manila) CONFIRMED appointments that aren't queued yet.
+  // Called by the background lifecycle job and the explicit Admin/Frontdesk
+  // POST /queue/auto-enqueue — never by a read. Future/past dates are refused.
+  async autoEnqueueConfirmed(date = manilaToday()) {
+    const targetDate = date || manilaToday();
+    if (targetDate !== manilaToday()) {
+      throw appError(400, "Only today's confirmed appointments can be added to the queue.");
+    }
+
     const result = await db.query(
       `SELECT id
        FROM appointments
@@ -342,7 +398,7 @@ const Queue = {
            WHERE q.appointment_id = appointments.id
          )
        ORDER BY time ASC, id ASC`,
-      [date || todayISO()]
+      [targetDate]
     );
 
     const added = [];
@@ -361,7 +417,7 @@ const Queue = {
     }
 
     return {
-      date: date || todayISO(),
+      date: targetDate,
       added,
       added_count: added.length,
       failed,
@@ -369,9 +425,23 @@ const Queue = {
     };
   },
 
-  // Read-only by design: the public, unauthenticated display must never write
-  // (no auto-enqueue, no LOCK TABLE). Confirmed appointments enter the queue
-  // when staff confirm them or open the staff queue screens.
+  // Dashboard "Active Queue": today's live entries whose appointment is still in
+  // the queue (same rule as the queue screens and the public display).
+  async liveCountToday() {
+    const result = await db.query(
+      `SELECT COUNT(*)::int AS n
+         FROM queue_entries q
+         JOIN appointments a ON a.id = q.appointment_id
+        WHERE q.queue_date = ${MANILA_TODAY_SQL}
+          AND q.status = ANY($1)
+          AND a.status = 'IN_QUEUE'`,
+      [LIVE_QUEUE_STATUSES]
+    );
+    return result.rows[0].n;
+  },
+
+  // Read-only by design: the public, unauthenticated display must never write.
+  // Only live entries of appointments that are still in the queue are shown.
   async getPublicDisplay() {
     const [specs, queue] = await Promise.all([
       db.query(
@@ -402,15 +472,17 @@ const Queue = {
          FROM queue_entries q
          JOIN appointments a ON q.appointment_id = a.id
          JOIN patients p ON a.patient_id = p.id
-         WHERE q.queue_date = (NOW() AT TIME ZONE 'Asia/Manila')::date
-           AND q.status IN ('WAITING', 'CALLED', 'IN_PROGRESS')
+         WHERE q.queue_date = ${MANILA_TODAY_SQL}
+           AND q.status = ANY($1)
+           AND a.status = 'IN_QUEUE'
          ORDER BY
            CASE q.status
              WHEN 'IN_PROGRESS' THEN 1
              WHEN 'CALLED' THEN 2
              ELSE 3
            END,
-           q.queue_number ASC`
+           q.queue_number ASC`,
+        [LIVE_QUEUE_STATUSES]
       ),
     ]);
 
@@ -475,7 +547,7 @@ const Queue = {
       const appointments = (await client.query(
         `UPDATE appointments
             SET status = 'NO_SHOW', updated_at = NOW()
-          WHERE status NOT IN ('COMPLETED', 'CANCELLED', 'NO_SHOW')
+          WHERE status NOT IN ('COMPLETED', 'CANCELLED', 'NO_SHOW', 'FOR_BILLING')
             AND (
               id = ANY($1::int[])
               OR (status = 'IN_QUEUE'
@@ -497,5 +569,10 @@ const Queue = {
     }
   },
 };
+
+Queue.VALID_QUEUE_STATUSES = VALID_QUEUE_STATUSES;
+Queue.FINAL_QUEUE_STATUSES = FINAL_QUEUE_STATUSES;
+Queue.LIVE_QUEUE_STATUSES = LIVE_QUEUE_STATUSES;
+Queue.QUEUE_TRANSITIONS = QUEUE_TRANSITIONS;
 
 module.exports = Queue;

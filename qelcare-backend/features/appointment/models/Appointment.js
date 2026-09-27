@@ -1,4 +1,13 @@
 const db = require("../../../config/database");
+const Queue = require("../../queue/models/Queue");
+const {
+  MANILA_NOW_SQL,
+  MANILA_TODAY_SQL,
+  manilaToday,
+  manilaNowMinuteKey,
+  isValidDateString,
+  isValidTimeString,
+} = require("../../../shared/utils/manilaTime");
 
 const VALID_STATUSES = ["PENDING", "CONFIRMED", "IN_QUEUE", "FOR_BILLING", "COMPLETED", "CANCELLED", "RESCHEDULED", "NO_SHOW"];
 const VALID_TYPES = ["consultation", "follow_up", "walk_in", "emergency"];
@@ -11,6 +20,18 @@ const VALID_BOOKED_FOR = ["self", "other"];
 const ACTIVE_CONFLICT_STATUSES = ["CONFIRMED", "IN_QUEUE", "FOR_BILLING", "COMPLETED"];
 const ACTIVE_VISIBLE_STATUSES = ["PENDING", "CONFIRMED", "IN_QUEUE", "FOR_BILLING", "RESCHEDULED"];
 const TERMINAL_STATUSES = ["COMPLETED", "CANCELLED", "NO_SHOW"];
+// Lost visits. "Appointments Today" (Dashboard and Appointment Management) is
+// every appointment on the clinic's current day except these.
+const LOST_STATUSES = ["CANCELLED", "NO_SHOW"];
+// A patient can hold only one not-yet-finished appointment per date/time, with
+// any doctor (a person can't be in two consultations at once). Relatives booked
+// by a patient get their own patient record, so they never collide with it.
+const PATIENT_ACTIVE_STATUSES = ["PENDING", "CONFIRMED", "IN_QUEUE", "FOR_BILLING", "RESCHEDULED"];
+// Only pre-visit appointments can move to another date/time. IN_QUEUE,
+// FOR_BILLING and finished visits belong to the queue / billing workflow.
+const RESCHEDULABLE_STATUSES = ["PENDING", "CONFIRMED", "RESCHEDULED"];
+// pg_advisory_xact_lock namespace for "one booking change per patient at a time".
+const PATIENT_LOCK_NAMESPACE = 4201;
 
 // Anti-spam: after a patient CANCELS, they must wait this many seconds before
 // they can book or cancel again. Cancelling is the churn signal, so this stops
@@ -20,6 +41,10 @@ const PATIENT_ACTION_COOLDOWN_SECONDS = 120;
 
 function normalizeStatus(status) {
   return String(status || "").trim().toUpperCase();
+}
+
+function statusLabel(status) {
+  return String(status || "").toLowerCase().replace(/_/g, " ");
 }
 
 function normalizeType(type) {
@@ -39,19 +64,8 @@ function normalizeTime(value) {
   return `${match[1].padStart(2, "0")}:${match[2]}`;
 }
 
-function manilaNowMinuteKey() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    hourCycle: "h23",
-  }).formatToParts(new Date());
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`;
+function isPositiveInt(value) {
+  return /^[1-9]\d{0,9}$/.test(String(value ?? "").trim()) && Number(value) <= 2147483647;
 }
 
 function appointmentMinuteKey(date, time) {
@@ -76,8 +90,9 @@ function assertNotPastManila(date, time, label = "Appointment schedule") {
   }
 }
 
-// Clinic operating hours: 8:00 AM to 8:00 PM (Asia/Manila). Patient bookings and
-// patient edits must fall inside this window.
+// Clinic operating hours: 8:00 AM to 8:00 PM (Asia/Manila). Every booking and
+// reschedule — patient or staff — must fall inside this window; the live queue
+// also closes at 8:00 PM (see queueSweep), so later visits could never be served.
 const CLINIC_OPEN_MINUTES = 8 * 60;   // 08:00
 const CLINIC_CLOSE_MINUTES = 20 * 60; // 20:00
 
@@ -93,7 +108,40 @@ function assertWithinClinicHours(time) {
   }
 }
 
-async function assertNoDoctorConflict({ doctor_id, date, time, excludeId = null }) {
+// Real calendar date + 24-hour time, in the future (Manila) and inside clinic hours.
+function assertValidSchedule(date, time, label = "Appointment schedule") {
+  if (!isValidDateString(date)) {
+    throw { statusCode: 400, message: "Enter a valid date (YYYY-MM-DD)." };
+  }
+  if (!isValidTimeString(time)) {
+    throw { statusCode: 400, message: "Enter a valid time (HH:MM, 24-hour clock)." };
+  }
+  assertNotPastManila(date, time, label);
+  assertWithinClinicHours(time);
+}
+
+async function inTransaction(work) {
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await work(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Serializes booking changes for one patient (create / reschedule / confirm) so
+// two parallel requests can't both pass the patient-conflict check.
+async function lockPatient(client, patientId) {
+  await client.query("SELECT pg_advisory_xact_lock($1::int, $2::int)", [PATIENT_LOCK_NAMESPACE, Number(patientId)]);
+}
+
+async function assertNoDoctorConflict({ doctor_id, date, time, excludeId = null }, client = db) {
   const params = [doctor_id, date, time, ACTIVE_CONFLICT_STATUSES];
   let exclude = "";
   if (excludeId) {
@@ -101,7 +149,7 @@ async function assertNoDoctorConflict({ doctor_id, date, time, excludeId = null 
     exclude = `AND id <> $${params.length}`;
   }
 
-  const conflict = await db.query(
+  const conflict = await client.query(
     `SELECT id
      FROM appointments
      WHERE doctor_id = $1
@@ -118,6 +166,76 @@ async function assertNoDoctorConflict({ doctor_id, date, time, excludeId = null 
   }
 }
 
+async function assertNoPatientConflict(client, { patient_id, date, time, excludeId = null, statuses = PATIENT_ACTIVE_STATUSES }) {
+  const params = [patient_id, date, time, statuses];
+  let exclude = "";
+  if (excludeId) {
+    params.push(excludeId);
+    exclude = `AND id <> $${params.length}`;
+  }
+  const conflict = await client.query(
+    `SELECT id FROM appointments
+      WHERE patient_id = $1 AND date = $2 AND time = $3 AND status = ANY($4) ${exclude}
+      LIMIT 1`,
+    params
+  );
+  if (conflict.rowCount > 0) {
+    throw { statusCode: 409, message: "This patient already has an appointment at this date and time." };
+  }
+}
+
+// The doctor must be an active Doctor account, the specialty is the doctor's own
+// (derived when omitted, rejected when it differs) and the patient record must
+// exist and be active. Returns the specialty to store.
+async function resolveBookingRelations(client, { patient_id, doctor_id, specialty_id }) {
+  if (!isPositiveInt(patient_id)) throw { statusCode: 400, message: "Select a valid patient." };
+  if (!isPositiveInt(doctor_id)) throw { statusCode: 400, message: "Select a valid doctor." };
+  const hasSpecialty = specialty_id !== undefined && specialty_id !== null && specialty_id !== "";
+  if (hasSpecialty && !isPositiveInt(specialty_id)) throw { statusCode: 400, message: "Select a valid specialty." };
+
+  const doctor = (await client.query(
+    `SELECT u.user_id, u.status, u.specialty_id, r.role_name, s.is_active AS specialty_active
+       FROM users u
+       JOIN roles r ON r.role_id = u.role_id
+       LEFT JOIN specialties s ON s.specialty_id = u.specialty_id
+      WHERE u.user_id = $1`,
+    [doctor_id]
+  )).rows[0];
+  if (!doctor || doctor.role_name !== "Doctor") {
+    throw { statusCode: 400, message: "The selected doctor is not a clinic doctor." };
+  }
+  if (doctor.status === "deactivated") {
+    throw { statusCode: 400, message: "The selected doctor's account is deactivated." };
+  }
+  if (!doctor.specialty_id) {
+    throw { statusCode: 400, message: "The selected doctor has no specialty assigned." };
+  }
+  if (doctor.specialty_active === false) {
+    throw { statusCode: 400, message: "The selected doctor's department is not active." };
+  }
+  if (hasSpecialty && Number(specialty_id) !== Number(doctor.specialty_id)) {
+    throw { statusCode: 400, message: "The selected specialty does not match the doctor's specialty." };
+  }
+
+  const patient = (await client.query("SELECT id, is_active FROM patients WHERE id = $1", [patient_id])).rows[0];
+  if (!patient) throw { statusCode: 400, message: "Patient record not found." };
+  if (patient.is_active === false) {
+    throw { statusCode: 400, message: "This patient record is inactive. Reactivate it before booking." };
+  }
+
+  return { specialty_id: doctor.specialty_id };
+}
+
+// "APT-00061", "apt61", "#61" or "61" -> 61 (the reference shown in the UI).
+function referenceId(search) {
+  const match = String(search || "").trim().match(/^(?:apt-?|#)?0*(\d{1,9})$/i);
+  return match ? Number(match[1]) : null;
+}
+
+function escapeLike(text) {
+  return String(text).replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 const BASE_SELECT = `
   SELECT
     a.*,
@@ -130,6 +248,7 @@ const BASE_SELECT = `
     p.date_of_birth,
     p.age AS patient_age,
     bu.email AS booked_by_email,
+    bur.role_name AS booked_by_role,
     TRIM(CONCAT_WS(' ', bu.first_name, bu.last_name)) AS booked_by_name,
     u.first_name AS doctor_first_name,
     u.last_name AS doctor_last_name,
@@ -137,7 +256,7 @@ const BASE_SELECT = `
     u.email AS doctor_email,
     s.specialty_name,
     s.slug AS specialty_slug,
-    ((a.date + a.time) <= (NOW() AT TIME ZONE 'Asia/Manila')) AS is_past,
+    ((a.date + a.time) <= ${MANILA_NOW_SQL}) AS is_past,
     (
       a.status IN ('COMPLETED','CANCELLED','NO_SHOW')
       OR (
@@ -146,7 +265,7 @@ const BASE_SELECT = `
         -- active until a terminal status and are never aged into history by the
         -- clock, so the patient's live visit-progress bar keeps advancing.
         a.status IN ('PENDING','CONFIRMED','RESCHEDULED')
-        AND (a.date + a.time) <= (NOW() AT TIME ZONE 'Asia/Manila')
+        AND (a.date + a.time) <= ${MANILA_NOW_SQL}
       )
     ) AS is_history,
     latest_mr.record_id AS latest_record_id,
@@ -157,6 +276,7 @@ const BASE_SELECT = `
   JOIN patients p ON a.patient_id = p.id
   JOIN users u ON a.doctor_id = u.user_id
   LEFT JOIN users bu ON a.booked_by = bu.user_id
+  LEFT JOIN roles bur ON bu.role_id = bur.role_id
   LEFT JOIN specialties s ON a.specialty_id = s.specialty_id
   LEFT JOIN LATERAL (
     SELECT mr.record_id, mr.diagnosis, mr.lab_requests, mr.visit_date, mr.created_at
@@ -181,40 +301,47 @@ const Appointment = {
     booked_for = "self",
     booked_for_relationship = null,
   }) {
-    assertNotPastManila(date, time);
-    await assertNoDoctorConflict({ doctor_id, date, time });
+    assertValidSchedule(date, time);
+    if (!isPositiveInt(patient_id)) throw { statusCode: 400, message: "Select a valid patient." };
 
-    let result;
-    try {
-      result = await db.query(
-        `INSERT INTO appointments
-          (patient_id, doctor_id, specialty_id, date, time, type, chief_complaint, notes, booked_by, booked_for, booked_for_relationship, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'PENDING')
-         RETURNING id`,
-        [
-          patient_id,
-          doctor_id,
-          specialty_id || null,
-          date,
-          time,
-          normalizeType(type),
-          chief_complaint || null,
-          notes || null,
-          booked_by || null,
-          normalizeBookedFor(booked_for),
-          booked_for_relationship || null,
-        ]
-      );
-    } catch (err) {
-      // uq_doctor_datetime is the authoritative guard against two bookings
-      // racing past assertNoDoctorConflict — surface a 409, not a 500.
-      if (err.code === "23505" && err.constraint === "uq_doctor_datetime") {
-        throw { statusCode: 409, message: "Doctor already has an active appointment at this time." };
+    const id = await inTransaction(async (client) => {
+      await lockPatient(client, patient_id);
+      const relations = await resolveBookingRelations(client, { patient_id, doctor_id, specialty_id });
+      await assertNoDoctorConflict({ doctor_id, date, time }, client);
+      await assertNoPatientConflict(client, { patient_id, date, time });
+
+      try {
+        const result = await client.query(
+          `INSERT INTO appointments
+            (patient_id, doctor_id, specialty_id, date, time, type, chief_complaint, notes, booked_by, booked_for, booked_for_relationship, status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'PENDING')
+           RETURNING id`,
+          [
+            patient_id,
+            doctor_id,
+            relations.specialty_id,
+            date,
+            time,
+            normalizeType(type),
+            chief_complaint || null,
+            notes || null,
+            booked_by || null,
+            normalizeBookedFor(booked_for),
+            booked_for_relationship || null,
+          ]
+        );
+        return result.rows[0].id;
+      } catch (err) {
+        // uq_doctor_datetime is the authoritative guard against two bookings
+        // racing past assertNoDoctorConflict — surface a 409, not a 500.
+        if (err.code === "23505" && err.constraint === "uq_doctor_datetime") {
+          throw { statusCode: 409, message: "Doctor already has an active appointment at this time." };
+        }
+        throw err;
       }
-      throw err;
-    }
+    });
 
-    return this.findById(result.rows[0].id);
+    return this.findById(id);
   },
 
   async findAll({
@@ -247,9 +374,11 @@ const Appointment = {
       conditions.push(`(p.user_id = $${params.length} OR a.booked_by = $${params.length})`);
     }
 
-    if (status) {
-      params.push(normalizeStatus(status));
-      conditions.push(`a.status = $${params.length}`);
+    // One status or a comma-separated group (e.g. "CANCELLED,NO_SHOW").
+    const statuses = String(status || "").split(",").map(normalizeStatus).filter(Boolean);
+    if (statuses.length) {
+      params.push(statuses);
+      conditions.push(`a.status = ANY($${params.length})`);
     }
     if (date) {
       params.push(date);
@@ -277,26 +406,40 @@ const Appointment = {
     }
     if (scope === "active") {
       params.push(ACTIVE_VISIBLE_STATUSES);
-      conditions.push(`a.status = ANY($${params.length}) AND (a.date + a.time) > (NOW() AT TIME ZONE 'Asia/Manila')`);
+      conditions.push(`a.status = ANY($${params.length}) AND (a.date + a.time) > ${MANILA_NOW_SQL}`);
     }
     if (scope === "history") {
       params.push(TERMINAL_STATUSES);
       // IN_QUEUE / FOR_BILLING are mid-visit (still active), so history is only
       // terminal statuses or pre-visit requests whose scheduled time has passed.
-      conditions.push(`(a.status = ANY($${params.length}) OR (a.status = ANY('{PENDING,CONFIRMED,RESCHEDULED}'::varchar[]) AND (a.date + a.time) <= (NOW() AT TIME ZONE 'Asia/Manila')))`);
+      conditions.push(`(a.status = ANY($${params.length}) OR (a.status = ANY('{PENDING,CONFIRMED,RESCHEDULED}'::varchar[]) AND (a.date + a.time) <= ${MANILA_NOW_SQL}))`);
     }
-    if (search) {
-      params.push(`%${search}%`);
+    const searchText = String(search || "").trim();
+    if (searchText) {
+      params.push(`%${escapeLike(searchText)}%`);
+      const like = `$${params.length}`;
+      const refId = referenceId(searchText);
+      let refMatch = "";
+      if (refId) {
+        params.push(refId);
+        refMatch = `a.id = $${params.length} OR`;
+      }
       conditions.push(`(
-        p.name ILIKE $${params.length} OR
-        p.first_name ILIKE $${params.length} OR
-        p.last_name ILIKE $${params.length} OR
-        p.phone ILIKE $${params.length} OR
-        u.first_name ILIKE $${params.length} OR
-        u.last_name ILIKE $${params.length} OR
-        bu.first_name ILIKE $${params.length} OR
-        bu.last_name ILIKE $${params.length} OR
-        CAST(a.id AS TEXT) ILIKE $${params.length}
+        ${refMatch}
+        p.name ILIKE ${like} OR
+        p.first_name ILIKE ${like} OR
+        p.last_name ILIKE ${like} OR
+        CONCAT_WS(' ', p.first_name, p.last_name) ILIKE ${like} OR
+        p.phone ILIKE ${like} OR
+        u.first_name ILIKE ${like} OR
+        u.last_name ILIKE ${like} OR
+        CONCAT_WS(' ', u.first_name, u.last_name) ILIKE ${like} OR
+        bu.first_name ILIKE ${like} OR
+        bu.last_name ILIKE ${like} OR
+        s.specialty_name ILIKE ${like} OR
+        a.chief_complaint ILIKE ${like} OR
+        a.notes ILIKE ${like} OR
+        CAST(a.id AS TEXT) ILIKE ${like}
       )`);
     }
 
@@ -306,23 +449,24 @@ const Appointment = {
     const orderSql = `
       ORDER BY
         CASE
-          WHEN a.status IN ('PENDING','CONFIRMED','IN_QUEUE','RESCHEDULED') AND (a.date + a.time) > (NOW() AT TIME ZONE 'Asia/Manila') THEN 0
+          WHEN a.status IN ('PENDING','CONFIRMED','IN_QUEUE','RESCHEDULED') AND (a.date + a.time) > ${MANILA_NOW_SQL} THEN 0
           ELSE 1
         END ASC,
         CASE a.status
           WHEN 'IN_QUEUE' THEN 0
-          WHEN 'CONFIRMED' THEN 1
-          WHEN 'PENDING' THEN 2
-          WHEN 'RESCHEDULED' THEN 3
-          WHEN 'COMPLETED' THEN 4
-          WHEN 'CANCELLED' THEN 5
-          WHEN 'NO_SHOW' THEN 6
+          WHEN 'FOR_BILLING' THEN 1
+          WHEN 'CONFIRMED' THEN 2
+          WHEN 'PENDING' THEN 3
+          WHEN 'RESCHEDULED' THEN 4
+          WHEN 'COMPLETED' THEN 5
+          WHEN 'CANCELLED' THEN 6
+          WHEN 'NO_SHOW' THEN 7
           ELSE 9
         END ASC,
-        CASE WHEN a.status IN ('PENDING','CONFIRMED','IN_QUEUE','RESCHEDULED') AND (a.date + a.time) > (NOW() AT TIME ZONE 'Asia/Manila') THEN a.date END ASC NULLS LAST,
-        CASE WHEN a.status IN ('PENDING','CONFIRMED','IN_QUEUE','RESCHEDULED') AND (a.date + a.time) > (NOW() AT TIME ZONE 'Asia/Manila') THEN a.time END ASC NULLS LAST,
-        CASE WHEN a.status NOT IN ('PENDING','CONFIRMED','IN_QUEUE','RESCHEDULED') OR (a.date + a.time) <= (NOW() AT TIME ZONE 'Asia/Manila') THEN a.date END DESC NULLS LAST,
-        CASE WHEN a.status NOT IN ('PENDING','CONFIRMED','IN_QUEUE','RESCHEDULED') OR (a.date + a.time) <= (NOW() AT TIME ZONE 'Asia/Manila') THEN a.time END DESC NULLS LAST,
+        CASE WHEN a.status IN ('PENDING','CONFIRMED','IN_QUEUE','RESCHEDULED') AND (a.date + a.time) > ${MANILA_NOW_SQL} THEN a.date END ASC NULLS LAST,
+        CASE WHEN a.status IN ('PENDING','CONFIRMED','IN_QUEUE','RESCHEDULED') AND (a.date + a.time) > ${MANILA_NOW_SQL} THEN a.time END ASC NULLS LAST,
+        CASE WHEN a.status NOT IN ('PENDING','CONFIRMED','IN_QUEUE','RESCHEDULED') OR (a.date + a.time) <= ${MANILA_NOW_SQL} THEN a.date END DESC NULLS LAST,
+        CASE WHEN a.status NOT IN ('PENDING','CONFIRMED','IN_QUEUE','RESCHEDULED') OR (a.date + a.time) <= ${MANILA_NOW_SQL} THEN a.time END DESC NULLS LAST,
         a.id DESC`;
 
     const selectSql = `${BASE_SELECT} ${where} ${orderSql} LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`;
@@ -348,6 +492,41 @@ const Appointment = {
       page: safePage,
       limit: safeLimit,
       pages: Math.max(1, Math.ceil(total / safeLimit)),
+    };
+  },
+
+  // Today's (Manila) appointment counts. The single definition behind the Admin
+  // Dashboard cards and the Appointment Management "Today" card:
+  //   active = every status except the lost ones (CANCELLED, NO_SHOW).
+  async todayCounts() {
+    const result = await db.query(
+      `SELECT status, COUNT(*)::int AS n
+         FROM appointments
+        WHERE date = ${MANILA_TODAY_SQL}
+        GROUP BY status`
+    );
+    const byStatus = Object.fromEntries(VALID_STATUSES.map((s) => [s, 0]));
+    for (const row of result.rows) byStatus[row.status] = row.n;
+    const total = Object.values(byStatus).reduce((sum, n) => sum + n, 0);
+    const lost = LOST_STATUSES.reduce((sum, s) => sum + (byStatus[s] || 0), 0);
+    return { total, active: total - lost, completed: byStatus.COMPLETED, by_status: byStatus };
+  },
+
+  // Whole-dataset counts for the Appointment Management cards (never limited to
+  // the page that happens to be loaded).
+  async stats() {
+    const [all, today] = await Promise.all([
+      db.query("SELECT status, COUNT(*)::int AS n FROM appointments GROUP BY status"),
+      this.todayCounts(),
+    ]);
+    const byStatus = Object.fromEntries(VALID_STATUSES.map((s) => [s, 0]));
+    for (const row of all.rows) byStatus[row.status] = row.n;
+    const total = Object.values(byStatus).reduce((sum, n) => sum + n, 0);
+    return {
+      total,
+      by_status: byStatus,
+      lost: LOST_STATUSES.reduce((sum, s) => sum + (byStatus[s] || 0), 0),
+      today,
     };
   },
 
@@ -383,26 +562,27 @@ const Appointment = {
   },
 
   // --------------------------------------------------------------------------
-  // confirmAndDeclineConflicts
+  // confirm
   //   Confirm a PENDING / RESCHEDULED appointment and claim its slot. Because
   //   PENDING requests don't hold a slot, several patients may have requested the
-  //   same doctor/date/time — confirmation is what locks it in. This method:
-  //     1. Locks the target row (FOR UPDATE) and checks it is still pending.
-  //     2. Flips it to CONFIRMED. The uq_doctor_datetime partial unique index
-  //        (now covering only CONFIRMED+ statuses) guarantees at most one
-  //        confirmed appointment per slot; a lost race surfaces as a clean 409.
-  //     3. Auto-declines every OTHER still-pending request for that exact slot
-  //        (CANCELLED with a clear reason) so double-booking is impossible.
-  //   Returns { appointment, declined: [{ id, booked_by, patient_id }] }.
+  //   same doctor/date/time — confirmation is what locks it in. In ONE
+  //   transaction:
+  //     1. Lock the row and re-check it is still pending and not in the past.
+  //     2. For a same-day visit, check it can actually be queued (specialty)
+  //        BEFORE changing anything.
+  //     3. Flip it to CONFIRMED. The uq_doctor_datetime partial unique index
+  //        guarantees at most one confirmed appointment per slot; a lost race
+  //        surfaces as a clean 409.
+  //     4. Same-day: create the queue entry and move it to IN_QUEUE. If that
+  //        fails, the whole confirmation rolls back.
+  //   Afterwards every OTHER still-pending request for that exact slot is
+  //   auto-declined (CANCELLED with a clear reason) so double-booking is
+  //   impossible. Returns { appointment, declined, queueEntry }.
   // --------------------------------------------------------------------------
   async confirmAndDeclineConflicts(id, confirmedBy) {
-    const client = await db.connect();
-    let slot;
-    try {
-      await client.query("BEGIN");
-
+    const { slot, queued } = await inTransaction(async (client) => {
       const current = (await client.query(
-        `SELECT id, doctor_id, TO_CHAR(date, 'YYYY-MM-DD') AS date, time::text AS time, status
+        `SELECT id, doctor_id, patient_id, specialty_id, TO_CHAR(date, 'YYYY-MM-DD') AS date, time::text AS time, status
            FROM appointments
           WHERE id = $1::integer
           FOR UPDATE`,
@@ -411,10 +591,24 @@ const Appointment = {
 
       if (!current) throw { statusCode: 404, message: "Appointment not found." };
       if (!["PENDING", "RESCHEDULED"].includes(current.status)) {
-        throw { statusCode: 400, message: `Only a pending appointment can be confirmed (this one is ${current.status.toLowerCase()}).` };
+        throw { statusCode: 400, message: `Only a pending appointment can be confirmed (this one is ${statusLabel(current.status)}).` };
+      }
+      if (isPastManila(current.date, current.time)) {
+        throw { statusCode: 400, message: "This appointment is in the past. It can only be settled as No Show or Cancelled." };
+      }
+      const sameDay = current.date === manilaToday();
+      if (sameDay && !current.specialty_id) {
+        throw { statusCode: 400, message: "Appointment has no specialty assigned, so it can't enter today's queue. Cancel it and book it again with the doctor's specialty." };
       }
 
-      slot = { doctor_id: current.doctor_id, date: current.date, time: current.time };
+      await lockPatient(client, current.patient_id);
+      await assertNoPatientConflict(client, {
+        patient_id: current.patient_id,
+        date: current.date,
+        time: current.time,
+        excludeId: current.id,
+        statuses: ["CONFIRMED", "IN_QUEUE", "FOR_BILLING"],
+      });
 
       try {
         await client.query(
@@ -428,13 +622,12 @@ const Appointment = {
         throw err;
       }
 
-      await client.query("COMMIT");
-    } catch (err) {
-      await client.query("ROLLBACK").catch(() => {});
-      client.release();
-      throw err;
-    }
-    client.release();
+      const entry = sameDay ? await Queue.addToQueue(id, { client }) : null;
+      return {
+        slot: { doctor_id: current.doctor_id, date: current.date, time: current.time },
+        queued: entry,
+      };
+    });
 
     // The slot is now locked to the confirmed appointment. Decline the other
     // still-pending requests for the same slot. Done as a separate statement so
@@ -460,64 +653,170 @@ const Appointment = {
     }
 
     const appointment = await this.findById(id);
-    return { appointment, declined };
+    const queueEntry = queued ? await Queue.findById(queued.queue_id) : null;
+    return { appointment, declined, queueEntry };
+  },
+
+  // Check in a CONFIRMED appointment for today: queue entry + IN_QUEUE happen in
+  // one transaction, so a failed check-in never leaves the appointment IN_QUEUE.
+  async checkIn(id) {
+    const queued = await inTransaction(async (client) => {
+      const current = (await client.query(
+        `SELECT id, specialty_id, TO_CHAR(date, 'YYYY-MM-DD') AS date, time::text AS time, status
+           FROM appointments WHERE id = $1::integer FOR UPDATE`,
+        [id]
+      )).rows[0];
+      if (!current) throw { statusCode: 404, message: "Appointment not found." };
+      if (current.status !== "CONFIRMED") {
+        throw { statusCode: 400, message: `Only a confirmed appointment can be checked in (this one is ${statusLabel(current.status)}).` };
+      }
+      if (current.date !== manilaToday()) {
+        throw { statusCode: 400, message: "Only today's confirmed appointments can enter the live queue." };
+      }
+      if (!current.specialty_id) {
+        throw { statusCode: 400, message: "Appointment has no specialty assigned, so it can't enter today's queue." };
+      }
+      return Queue.addToQueue(id, { client });
+    });
+    return {
+      appointment: await this.findById(id),
+      queueEntry: await Queue.findById(queued.queue_id),
+    };
+  },
+
+  // --------------------------------------------------------------------------
+  // closeAppointment
+  //   Move an appointment to CANCELLED or NO_SHOW atomically, together with its
+  //   queue entry: an active entry (WAITING/CALLED/IN_PROGRESS/SKIPPED) is closed
+  //   with the same status in the same transaction, so a cancelled/no-show
+  //   patient can never stay in (or be served from) the live queue.
+  //   allowedFrom  statuses this call may close
+  //   requirePast  NO_SHOW settles only once the scheduled time has passed
+  // --------------------------------------------------------------------------
+  async closeAppointment(id, status, { actorId = null, reason = null, allowedFrom = [], requirePast = false } = {}) {
+    const nextStatus = normalizeStatus(status);
+    if (!["CANCELLED", "NO_SHOW"].includes(nextStatus)) {
+      throw { statusCode: 400, message: "Appointments can only be closed as Cancelled or No Show." };
+    }
+    const cancelReason = String(reason || "").trim();
+
+    const { fromStatus } = await inTransaction(async (client) => {
+      const current = (await client.query(
+        `SELECT id, status, TO_CHAR(date, 'YYYY-MM-DD') AS date, time::text AS time
+           FROM appointments WHERE id = $1::integer FOR UPDATE`,
+        [id]
+      )).rows[0];
+      if (!current) throw { statusCode: 404, message: "Appointment not found." };
+
+      if (TERMINAL_STATUSES.includes(current.status)) {
+        throw { statusCode: 400, message: `Appointment is already ${statusLabel(current.status)}.` };
+      }
+      if (current.status === "FOR_BILLING") {
+        throw { statusCode: 400, message: "This visit is awaiting payment. It can't be cancelled or marked No Show." };
+      }
+      if (!allowedFrom.includes(current.status)) {
+        if (current.status === "IN_QUEUE") {
+          throw { statusCode: 400, message: "An in-queue visit is completed through the queue/consultation workflow, not settled here." };
+        }
+        throw { statusCode: 400, message: `Cannot change appointment from ${current.status} to ${nextStatus}.` };
+      }
+      const past = isPastManila(current.date, current.time);
+      if (requirePast && !past) {
+        throw { statusCode: 400, message: "This appointment is not in the past. Use the normal status actions." };
+      }
+      if (nextStatus === "CANCELLED" && !cancelReason) {
+        throw { statusCode: 400, message: "Cancellation reason is required." };
+      }
+
+      await client.query(
+        `UPDATE appointments
+            SET status = $1::varchar,
+                cancelled_by = CASE WHEN $1::varchar = 'CANCELLED' THEN $2::integer ELSE cancelled_by END,
+                cancel_reason = CASE
+                                  WHEN $1::varchar = 'CANCELLED' THEN $3::text
+                                  WHEN $1::varchar = 'NO_SHOW' THEN COALESCE(cancel_reason, 'Auto/closed: patient did not show.')
+                                  ELSE cancel_reason
+                                END,
+                updated_at = NOW()
+          WHERE id = $4::integer`,
+        [nextStatus, actorId, cancelReason || null, id]
+      );
+
+      await client.query(
+        `UPDATE queue_entries
+            SET status = $1::varchar, completed_at = COALESCE(completed_at, NOW()), updated_at = NOW()
+          WHERE appointment_id = $2::integer
+            AND status NOT IN ('DONE', 'NO_SHOW', 'CANCELLED')`,
+        [nextStatus, id]
+      );
+
+      return { fromStatus: current.status };
+    });
+
+    return { appointment: await this.findById(id), fromStatus };
   },
 
   async reschedule(id, { date, time }) {
     if (!date || !time) {
       throw { statusCode: 400, message: "New date and time are required." };
     }
+    assertValidSchedule(date, time, "New appointment schedule");
 
-    assertNotPastManila(date, time, "New appointment schedule");
+    await inTransaction(async (client) => {
+      const current = (await client.query(
+        "SELECT *, time::text AS time, TO_CHAR(date, 'YYYY-MM-DD') AS date FROM appointments WHERE id = $1 FOR UPDATE",
+        [id]
+      )).rows[0];
+      if (!current) throw { statusCode: 404, message: "Appointment not found." };
+      if (current.status === "FOR_BILLING") {
+        throw { statusCode: 400, message: "This visit is awaiting payment and can't be rescheduled." };
+      }
+      if (!RESCHEDULABLE_STATUSES.includes(current.status)) {
+        throw { statusCode: 400, message: `Cannot reschedule an appointment with status ${current.status}.` };
+      }
+      if (isPastManila(current.date, current.time)) {
+        throw { statusCode: 400, message: "Past appointments are history and cannot be rescheduled." };
+      }
+      const queued = await client.query("SELECT 1 FROM queue_entries WHERE appointment_id = $1", [id]);
+      if (queued.rowCount > 0) {
+        throw { statusCode: 400, message: "This appointment already has a queue record, so it can't be moved. Cancel it and book a new appointment instead." };
+      }
 
-    const current = await this.getRawById(id);
-    if (!current) throw { statusCode: 404, message: "Appointment not found." };
-    if (["COMPLETED", "CANCELLED", "NO_SHOW", "IN_QUEUE"].includes(current.status)) {
-      throw { statusCode: 400, message: `Cannot reschedule an appointment with status ${current.status}.` };
-    }
-    if (isPastManila(current.date, current.time)) {
-      throw { statusCode: 400, message: "Past appointments are history and cannot be rescheduled." };
-    }
+      await lockPatient(client, current.patient_id);
+      await assertNoDoctorConflict({ doctor_id: current.doctor_id, date, time, excludeId: id }, client);
+      await assertNoPatientConflict(client, { patient_id: current.patient_id, date, time, excludeId: id });
 
-    await assertNoDoctorConflict({
-      doctor_id: current.doctor_id,
-      date,
-      time,
-      excludeId: id,
+      const nextNotes = current.notes
+        ? `${current.notes}\nRescheduled from ${current.date} ${current.time}.`
+        : `Rescheduled from ${current.date} ${current.time}.`;
+
+      try {
+        await client.query(
+          `UPDATE appointments
+           SET date = $1,
+               time = $2,
+               status = 'PENDING',
+               notes = $3,
+               updated_at = NOW()
+           WHERE id = $4`,
+          [date, time, nextNotes, id]
+        );
+      } catch (err) {
+        if (err.code === "23505" && err.constraint === "uq_doctor_datetime") {
+          throw { statusCode: 409, message: "Doctor already has an active appointment at this time." };
+        }
+        throw err;
+      }
     });
 
-    const nextNotes = current.notes
-      ? `${current.notes}\nRescheduled from ${current.date} ${current.time}.`
-      : `Rescheduled from ${current.date} ${current.time}.`;
-
-    let result;
-    try {
-      result = await db.query(
-        `UPDATE appointments
-         SET date = $1,
-             time = $2,
-             status = 'PENDING',
-             notes = $3,
-             updated_at = NOW()
-         WHERE id = $4
-         RETURNING id`,
-        [date, time, nextNotes, id]
-      );
-    } catch (err) {
-      if (err.code === "23505" && err.constraint === "uq_doctor_datetime") {
-        throw { statusCode: 409, message: "Doctor already has an active appointment at this time." };
-      }
-      throw err;
-    }
-
-    return this.findById(result.rows[0].id);
+    return this.findById(id);
   },
 
   async getTodayByDoctor(doctorId) {
     const result = await db.query(
       `${BASE_SELECT}
        WHERE a.doctor_id = $1
-         AND a.date = (NOW() AT TIME ZONE 'Asia/Manila')::date
+         AND a.date = ${MANILA_TODAY_SQL}
          AND a.status NOT IN ('CANCELLED','NO_SHOW')
        ORDER BY a.time ASC`,
       [doctorId]
@@ -527,51 +826,24 @@ const Appointment = {
 
   // --------------------------------------------------------------------------
   // settlePastById
-  //   Settle a SINGLE past, non-terminal appointment into a terminal state.
+  //   Settle a SINGLE past, pre-visit appointment into a terminal state.
   //   Allowed targets: NO_SHOW (patient never came) or CANCELLED (with reason).
-  //   Guards: must exist, must be past, must be currently non-terminal, and
-  //   must not be IN_QUEUE (an in-queue/in-consultation visit is the doctor's
-  //   workflow, not an admin "no show"). Returns the refreshed appointment.
+  //   Only PENDING / CONFIRMED / RESCHEDULED can be settled: an IN_QUEUE visit
+  //   belongs to the queue/consultation workflow and a FOR_BILLING visit to the
+  //   cashier. Returns the refreshed appointment.
   // --------------------------------------------------------------------------
   async settlePastById(id, status, { cancelled_by = null, cancel_reason = null } = {}) {
     const nextStatus = normalizeStatus(status);
     if (!["NO_SHOW", "CANCELLED"].includes(nextStatus)) {
       throw { statusCode: 400, message: "Past appointments can only be settled as NO_SHOW or CANCELLED." };
     }
-
-    const current = await this.getRawById(id);
-    if (!current) throw { statusCode: 404, message: "Appointment not found." };
-
-    if (TERMINAL_STATUSES.includes(current.status)) {
-      throw { statusCode: 400, message: `Appointment is already ${current.status} and needs no settling.` };
-    }
-    if (!isPastManila(current.date, current.time)) {
-      throw { statusCode: 400, message: "This appointment is not in the past. Use the normal status actions." };
-    }
-    if (current.status === "IN_QUEUE") {
-      throw { statusCode: 400, message: "An in-queue visit is completed through the consultation workflow, not settled here." };
-    }
-    if (nextStatus === "CANCELLED" && !String(cancel_reason || "").trim()) {
-      throw { statusCode: 400, message: "Cancellation reason is required." };
-    }
-
-    const result = await db.query(
-      `UPDATE appointments
-          SET status = $1::varchar,
-              cancelled_by = CASE WHEN $1::varchar = 'CANCELLED' THEN $2::integer ELSE cancelled_by END,
-              cancel_reason = CASE
-                                WHEN $1::varchar = 'CANCELLED' THEN $3::text
-                                WHEN $1::varchar = 'NO_SHOW' THEN COALESCE(cancel_reason, 'Auto/closed: patient did not show.')
-                                ELSE cancel_reason
-                              END,
-              updated_at = NOW()
-        WHERE id = $4::integer
-        RETURNING id`,
-      [nextStatus, cancelled_by, cancel_reason || null, id]
-    );
-
-    if (!result.rows[0]) return null;
-    return this.findById(result.rows[0].id);
+    const { appointment } = await this.closeAppointment(id, nextStatus, {
+      actorId: cancelled_by,
+      reason: cancel_reason,
+      allowedFrom: ["PENDING", "CONFIRMED", "RESCHEDULED"],
+      requirePast: true,
+    });
+    return appointment;
   },
 
   // --------------------------------------------------------------------------
@@ -589,7 +861,7 @@ const Appointment = {
               cancel_reason = COALESCE(cancel_reason, 'Auto-closed: appointment time passed without check-in.'),
               updated_at = NOW()
         WHERE status IN ('PENDING','CONFIRMED','RESCHEDULED')
-          AND (date + time) <= ((NOW() AT TIME ZONE 'Asia/Manila') - ($1::text || ' minutes')::interval)
+          AND (date + time) <= (${MANILA_NOW_SQL} - ($1::text || ' minutes')::interval)
         RETURNING id`,
       [String(graceMinutes)]
     );
@@ -685,8 +957,11 @@ Appointment.VALID_STATUSES = VALID_STATUSES;
 Appointment.VALID_TYPES = VALID_TYPES;
 Appointment.ACTIVE_VISIBLE_STATUSES = ACTIVE_VISIBLE_STATUSES;
 Appointment.TERMINAL_STATUSES = TERMINAL_STATUSES;
+Appointment.LOST_STATUSES = LOST_STATUSES;
 Appointment.isPastManila = isPastManila;
 Appointment.assertNotPastManila = assertNotPastManila;
 Appointment.assertWithinClinicHours = assertWithinClinicHours;
+Appointment.assertValidSchedule = assertValidSchedule;
+Appointment.isPositiveInt = isPositiveInt;
 
 module.exports = Appointment;

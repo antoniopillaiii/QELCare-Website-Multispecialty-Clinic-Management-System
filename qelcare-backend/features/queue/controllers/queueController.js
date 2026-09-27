@@ -1,18 +1,14 @@
 const Queue = require("../models/Queue");
 const Vital = require("../../vitals/models/Vital");
 const logger = require("../../../shared/utils/activityLogger");
-const { sweepStaleQueue } = require("../../../shared/utils/queueSweep");
+const { manilaToday, isValidDateString } = require("../../../shared/utils/manilaTime");
 
-function todayISO() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
+// ?date= is optional (defaults to today in Manila) but must be a real date.
+function readDate(req) {
+  const raw = req.query.date;
+  if (raw === undefined || raw === "") return { date: manilaToday() };
+  if (!isValidDateString(raw)) return { error: "Invalid date. Use YYYY-MM-DD." };
+  return { date: raw };
 }
 
 async function writeLog(req, payload) {
@@ -76,12 +72,13 @@ const queueController = {
     }
   },
 
+  // Read-only: viewing any date (today, past or future) never enqueues or
+  // settles anything. Enqueueing and stale-queue settling run in the background
+  // lifecycle job (server.js) or through the explicit POST /queue/auto-enqueue.
   async getSpecialties(req, res) {
     try {
-      const date = req.query.date || todayISO();
-      // Self-heal the live queue: resolve stale / skipped no-shows before showing it.
-      try { await sweepStaleQueue({ skipGraceMinutes: 30, clinicCloseHour: 20 }); }
-      catch (sweepErr) { console.error("Queue sweep error:", sweepErr.message); }
+      const { date, error } = readDate(req);
+      if (error) return res.status(400).json({ success: false, message: error });
       const specialties = await Queue.getSpecialties(date);
       res.json({ success: true, data: specialties, specialties });
     } catch (err) {
@@ -93,7 +90,8 @@ const queueController = {
   async getQueueBySpecialty(req, res) {
     try {
       const { specialtyId } = req.params;
-      const date = req.query.date || todayISO();
+      const { date, error } = readDate(req);
+      if (error) return res.status(400).json({ success: false, message: error });
       const queue = await Queue.findBySpecialtyAndDate(specialtyId, date);
       res.json({ success: true, data: queue, queue });
     } catch (err) {
@@ -140,6 +138,9 @@ const queueController = {
       }
 
       const nextStatus = normalizeStatus(status);
+      if (!Queue.VALID_QUEUE_STATUSES.includes(nextStatus)) {
+        return res.status(400).json({ success: false, message: `Invalid queue status "${nextStatus}".` });
+      }
       if (!canRoleSetQueueStatus(req.user?.role, nextStatus)) {
         return res.status(403).json({
           success: false,
@@ -151,8 +152,9 @@ const queueController = {
       if (!existingEntry) return res.status(404).json({ success: false, message: "Queue entry not found." });
 
       // Vitals are mandatory: a patient's visit cannot be completed (marked DONE)
-      // until the nurse has recorded their vitals for this appointment.
-      if (nextStatus === "DONE" && existingEntry.appointment_id) {
+      // until the nurse has recorded their vitals for this appointment. A repeat
+      // Done on an already-finished entry skips this and is answered as a no-op.
+      if (nextStatus === "DONE" && existingEntry.status !== "DONE" && existingEntry.appointment_id) {
         const vitals = await Vital.findByAppointment(existingEntry.appointment_id);
         if (!vitals || vitals.length === 0) {
           return res.status(400).json({
@@ -163,24 +165,28 @@ const queueController = {
         }
       }
 
-      const entry = await Queue.updateStatus(req.params.queueId, nextStatus, notes);
-      if (!entry) return res.status(404).json({ success: false, message: "Queue entry not found." });
+      const result = await Queue.updateStatus(req.params.queueId, nextStatus, notes);
+      if (!result) return res.status(404).json({ success: false, message: "Queue entry not found." });
+      const { entry, unchanged } = result;
 
-      await writeLog(req, {
-        action: "QUEUE_STATUS_CHANGED",
-        entityType: "queue",
-        entityId: entry.queue_id,
-        description: `Queue #${entry.queue_number} changed to ${entry.status}`,
-        metadata: {
-          queue_id: entry.queue_id,
-          appointment_id: entry.appointment_id,
-          status: entry.status,
-        },
-      });
+      if (!unchanged) {
+        await writeLog(req, {
+          action: "QUEUE_STATUS_CHANGED",
+          entityType: "queue",
+          entityId: entry.queue_id,
+          description: `Queue #${entry.queue_number} changed to ${entry.status}`,
+          metadata: {
+            queue_id: entry.queue_id,
+            appointment_id: entry.appointment_id,
+            status: entry.status,
+          },
+        });
+      }
 
       res.json({
         success: true,
-        message: "Queue status updated.",
+        unchanged,
+        message: unchanged ? `Queue entry is already ${entry.status.replace("_", " ").toLowerCase()}.` : "Queue status updated.",
         data: entry,
         queue_entry: entry,
       });
@@ -191,9 +197,14 @@ const queueController = {
     }
   },
 
+  // Explicit, authorized (Admin/Frontdesk) action: queue today's confirmed
+  // appointments now instead of waiting for the background job. Today only.
   async autoEnqueue(req, res) {
     try {
-      const date = req.body?.date || req.query.date || todayISO();
+      const date = req.body?.date || req.query.date || manilaToday();
+      if (!isValidDateString(date)) {
+        return res.status(400).json({ success: false, message: "Invalid date. Use YYYY-MM-DD." });
+      }
       const result = await Queue.autoEnqueueConfirmed(date);
 
       await writeLog(req, {
@@ -214,6 +225,7 @@ const queueController = {
         data: result,
       });
     } catch (err) {
+      if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
       console.error("Auto enqueue error:", err);
       res.status(500).json({ success: false, message: "Failed to auto-enqueue confirmed appointments." });
     }

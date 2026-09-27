@@ -1,5 +1,6 @@
 const Inquiry = require("../models/Inquiry");
 const logger = require("../../../shared/utils/activityLogger");
+const { isValidDateString } = require("../../../shared/utils/manilaTime");
 
 function clean(value, max) {
   return String(value || "").trim().slice(0, max);
@@ -16,6 +17,9 @@ module.exports = {
       const message = clean(req.body.message, 2000);
       const preferred_date = req.body.preferred_date || null;
 
+      if (preferred_date && !isValidDateString(preferred_date)) {
+        return res.status(400).json({ success: false, message: "Please enter a valid preferred date." });
+      }
       if (!full_name || !message) {
         return res.status(400).json({ success: false, message: "Your name and a message are required." });
       }
@@ -57,7 +61,7 @@ module.exports = {
 
   async update(req, res) {
     try {
-      const { status } = req.body;
+      const { status } = req.body || {};
       if (status && !Inquiry.VALID_STATUSES.includes(status)) {
         return res.status(400).json({ success: false, message: `Invalid status. Use: ${Inquiry.VALID_STATUSES.join(", ")}` });
       }

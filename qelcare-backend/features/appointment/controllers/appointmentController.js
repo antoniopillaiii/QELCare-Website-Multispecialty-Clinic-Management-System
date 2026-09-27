@@ -1,13 +1,12 @@
 const Appointment = require("../models/Appointment");
 const Patient = require("../../patient/models/Patient");
-const Queue = require("../../queue/models/Queue");
 const Notification = require("../../notification/models/Notification");
 const emailNotifier = require("../../../shared/utils/emailNotifier");
 const smsNotifier = require("../../../shared/utils/smsNotifier");
 const patientNotifier = require("../../../shared/utils/patientNotifier");
 const logger = require("../../../shared/utils/activityLogger");
 const db = require("../../../config/database");
-const { sweepStaleQueue } = require("../../../shared/utils/queueSweep");
+const { isValidDateString, manilaToday } = require("../../../shared/utils/manilaTime");
 
 // Appointment notifications go to `booked_by`, which may be the patient OR the
 // staff member (Admin/Frontdesk/etc.) who booked on their behalf. Point each
@@ -39,11 +38,16 @@ async function appointmentLinkForUser(userId) {
   }
 }
 
+// Staff moves for an appointment that is not yet past. NO_SHOW is reachable only
+// once the scheduled time has passed (the "settle" path below); IN_QUEUE visits
+// are no-showed through the queue, and FOR_BILLING / finished visits have no
+// staff moves here at all.
 const TRANSITIONS = {
   PENDING: ["CONFIRMED", "CANCELLED"],
   CONFIRMED: ["IN_QUEUE", "CANCELLED", "NO_SHOW"],
   IN_QUEUE: ["CANCELLED", "NO_SHOW"],
-  RESCHEDULED: ["CONFIRMED", "CANCELLED", "RESCHEDULED"],
+  RESCHEDULED: ["CONFIRMED", "CANCELLED"],
+  FOR_BILLING: [],
   COMPLETED: [],
   CANCELLED: [],
   NO_SHOW: [],
@@ -68,31 +72,21 @@ function hasRole(req, allowedRoles) {
   return allowedRoles.includes(req.user?.role);
 }
 
-function todayManilaISO() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
-function dateOnly(value) {
-  if (!value) return "";
-  if (typeof value === "string") return value.slice(0, 10);
-
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date(value));
-
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
+// Validates list filters up front so bad input is a 400, not a database error.
+function listQueryError(query) {
+  for (const key of ["date", "date_from", "date_to"]) {
+    if (query[key] && !isValidDateString(query[key])) return `Invalid ${key.replace("_", " ")}. Use YYYY-MM-DD.`;
+  }
+  for (const key of ["doctor_id", "specialty_id", "patient_id"]) {
+    if (query[key] && !Appointment.isPositiveInt(query[key])) return `Invalid ${key.replace("_id", "")} filter.`;
+  }
+  if (query.status) {
+    const statuses = String(query.status).split(",").map(normalizeStatus).filter(Boolean);
+    const bad = statuses.find((s) => !Appointment.VALID_STATUSES.includes(s));
+    if (bad) return `Invalid status filter "${bad}".`;
+  }
+  if (query.scope && !["active", "history"].includes(String(query.scope))) return "Invalid scope filter.";
+  return "";
 }
 
 function cleanText(value, max = 120) {
@@ -188,10 +182,20 @@ async function notifyPatient({ userId, appointment, title, message, type = "appo
 // IN_QUEUE (not CONFIRMED), so both count as "confirmed".
 const SMS_STATUSES = new Set(["CONFIRMED", "IN_QUEUE", "CANCELLED", "RESCHEDULED"]);
 
+// Patient-facing email goes to the patient's own address. The booker's address is
+// a fallback only when the booker is a patient account (e.g. a patient who booked
+// for a relative with no email) — never a staff member who booked a walk-in.
+function patientEmailRecipient(appointment) {
+  if (appointment.patient_email) return appointment.patient_email;
+  if (appointment.booked_by_role === "Patient") return appointment.booked_by_email || null;
+  return null;
+}
+
 async function emailPatient({ appointment, status }) {
   try {
-    await emailNotifier.sendAppointmentNotification({
-      to: appointment.patient_email || appointment.booked_by_email,
+    const to = patientEmailRecipient(appointment);
+    if (to) await emailNotifier.sendAppointmentNotification({
+      to,
       patientName: appointment.patient_name,
       doctorName: appointment.doctor_name,
       specialtyName: appointment.specialty_name,
@@ -279,18 +283,11 @@ const appointmentController = {
         limit = 20,
       } = req.query;
 
-      // Lazy sweep: when staff open the list, roll any long-past, never-resolved
-      // appointments to NO_SHOW so nothing sits stuck as PENDING. Cheap, idempotent,
-      // and a safety net in case the background interval isn't running.
-      if (role === "Admin" || role === "Frontdesk") {
-        try {
-          await Appointment.autoSettlePastAppointments({ graceMinutes: 120 });
-          await sweepStaleQueue({ skipGraceMinutes: 30, clinicCloseHour: 20 });
-        } catch (sweepErr) {
-          console.error("Lazy auto-settle error:", sweepErr.message);
-        }
-      }
+      const queryError = listQueryError(req.query);
+      if (queryError) return res.status(400).json({ success: false, message: queryError });
 
+      // Read-only: stale past appointments and queue entries are settled by the
+      // background lifecycle job (server.js), not as a side effect of viewing.
       const result = await Appointment.findAll({
         role,
         userId: user_id,
@@ -320,10 +317,26 @@ const appointmentController = {
     }
   },
 
+  // Whole-dataset counts for the Appointment Management cards.
+  async getStats(req, res) {
+    try {
+      const stats = await Appointment.stats();
+      res.json({ success: true, data: stats });
+    } catch (err) {
+      console.error("Appointment stats error:", err);
+      res.status(500).json({ success: false, message: "Failed to load appointment statistics." });
+    }
+  },
+
   async getById(req, res) {
     try {
       const appointment = await Appointment.findById(req.params.id);
       if (!appointment) return res.status(404).json({ success: false, message: "Appointment not found." });
+      // Doctors work only with their own patients' appointments (the list is
+      // already scoped this way); never expose another doctor's visit/diagnosis.
+      if (req.user?.role === "Doctor" && Number(appointment.doctor_id) !== Number(req.user.user_id)) {
+        return res.status(403).json({ success: false, message: "Doctors can only view their own appointments." });
+      }
       if (["Cashier", "Frontdesk"].includes(req.user?.role)) {
         appointment.latest_diagnosis = null;
       }
@@ -339,6 +352,9 @@ const appointmentController = {
       const nextStatus = normalizeStatus(req.body.status);
       const { cancel_reason } = req.body;
       if (!nextStatus) return res.status(400).json({ success: false, message: "Status is required." });
+      if (!Appointment.VALID_STATUSES.includes(nextStatus)) {
+        return res.status(400).json({ success: false, message: `Invalid status "${nextStatus}".` });
+      }
 
       const allowedRoles = APPOINTMENT_STATUS_ROLES[nextStatus] || [];
       if (allowedRoles.length && !hasRole(req, allowedRoles)) {
@@ -354,6 +370,12 @@ const appointmentController = {
           message: "Doctors complete visits through the queue/consultation workflow, not direct appointment status editing.",
         });
       }
+      if (nextStatus === "FOR_BILLING") {
+        return res.status(400).json({
+          success: false,
+          message: "A visit moves to For Billing only when the doctor completes it in the queue.",
+        });
+      }
 
       const current = await Appointment.getRawById(req.params.id);
       if (!current) return res.status(404).json({ success: false, message: "Appointment not found." });
@@ -364,22 +386,14 @@ const appointmentController = {
       // A past appointment that was never completed/cancelled must not be left
       // hanging as PENDING/CONFIRMED forever. Admin/Frontdesk may SETTLE it as
       // NO_SHOW or CANCELLED. Forward transitions (CONFIRMED/IN_QUEUE) make no
-      // sense for a past date and stay blocked.
+      // sense for a past date and stay blocked; IN_QUEUE and FOR_BILLING visits
+      // belong to the queue and billing workflows.
       if (isPast) {
         if (!["NO_SHOW", "CANCELLED"].includes(nextStatus)) {
           return res.status(400).json({
             success: false,
             message: "This appointment is in the past. It can only be settled as No Show or Cancelled.",
           });
-        }
-        if (Appointment.TERMINAL_STATUSES.includes(current.status)) {
-          return res.status(400).json({
-            success: false,
-            message: `Appointment is already ${current.status}.`,
-          });
-        }
-        if (nextStatus === "CANCELLED" && !String(cancel_reason || "").trim()) {
-          return res.status(400).json({ success: false, message: "Cancellation reason is required." });
         }
 
         const settled = await Appointment.settlePastById(req.params.id, nextStatus, {
@@ -424,53 +438,56 @@ const appointmentController = {
         });
       }
 
-      if (nextStatus === "CANCELLED" && !String(cancel_reason || "").trim()) {
-        return res.status(400).json({ success: false, message: "Cancellation reason is required." });
+      // A patient can only fail to show once their scheduled time has come.
+      if (nextStatus === "NO_SHOW") {
+        return res.status(400).json({
+          success: false,
+          message: `This appointment is scheduled for ${current.date} at ${String(current.time).slice(0, 5)}. It can only be marked No Show after that time.`,
+        });
       }
 
       let appointment;
       let declinedConflicts = [];
-      if (nextStatus === "CONFIRMED") {
+      let queueEntry = null;
+      let message = "Status updated.";
+
+      if (nextStatus === "CANCELLED") {
+        if (!String(cancel_reason || "").trim()) {
+          return res.status(400).json({ success: false, message: "Cancellation reason is required." });
+        }
+        // Cancels the appointment and, in the same transaction, closes its queue
+        // entry so the patient leaves the live queue and the waiting-room display.
+        ({ appointment } = await Appointment.closeAppointment(req.params.id, "CANCELLED", {
+          actorId: req.user.user_id,
+          reason: cancel_reason,
+          allowedFrom: ["PENDING", "CONFIRMED", "IN_QUEUE", "RESCHEDULED"],
+        }));
+        message = current.status === "IN_QUEUE"
+          ? "Appointment cancelled and removed from today's queue."
+          : "Appointment cancelled.";
+      } else if (nextStatus === "CONFIRMED") {
         // Confirming claims the slot: atomically set CONFIRMED (a lost race with
-        // another confirm for the same slot returns 409) and auto-decline any
-        // other still-pending requests for that exact slot.
+        // another confirm for the same slot returns 409), queue a same-day visit
+        // in the same transaction, and auto-decline other pending requests.
         const confirmResult = await Appointment.confirmAndDeclineConflicts(req.params.id, req.user.user_id);
         appointment = confirmResult.appointment;
         declinedConflicts = confirmResult.declined;
-      } else {
-        appointment = await Appointment.updateStatus(req.params.id, nextStatus, {
-          cancelled_by: req.user.user_id,
-          cancel_reason,
-        });
-      }
-      let queueEntry = null;
-      let finalStatus = nextStatus;
-      let message = "Status updated.";
-
-      if (nextStatus === "CONFIRMED") {
-        if (dateOnly(current.date) === todayManilaISO()) {
-          queueEntry = await Queue.addToQueue(req.params.id);
-          appointment = await Appointment.findById(req.params.id);
-          finalStatus = "IN_QUEUE";
-          message = "Appointment approved and added to today's queue.";
-        } else {
-          message = "Appointment approved. It will stay confirmed until the appointment date.";
-        }
-      }
-
-      if (nextStatus === "IN_QUEUE") {
-        if (dateOnly(current.date) !== todayManilaISO()) {
+        queueEntry = confirmResult.queueEntry;
+        message = queueEntry
+          ? "Appointment approved and added to today's queue."
+          : "Appointment approved. It will stay confirmed until the appointment date.";
+      } else if (nextStatus === "IN_QUEUE") {
+        if (current.date !== manilaToday()) {
           return res.status(400).json({
             success: false,
             message: "Only today's confirmed appointments can enter the live queue.",
           });
         }
-
-        queueEntry = await Queue.addToQueue(req.params.id);
-        appointment = await Appointment.findById(req.params.id);
-        finalStatus = "IN_QUEUE";
+        ({ appointment, queueEntry } = await Appointment.checkIn(req.params.id));
         message = "Appointment added to today's queue.";
       }
+
+      const finalStatus = appointment.status;
 
       if (appointment.booked_by) {
         await notifyPatient({
@@ -578,6 +595,12 @@ const appointmentController = {
   async getTodayByDoctor(req, res) {
     try {
       const doctorId = req.params.doctorId || req.user.user_id;
+      if (!Appointment.isPositiveInt(doctorId)) {
+        return res.status(400).json({ success: false, message: "Invalid doctor id." });
+      }
+      if (req.user?.role === "Doctor" && Number(doctorId) !== Number(req.user.user_id)) {
+        return res.status(403).json({ success: false, message: "Doctors can only view their own schedule." });
+      }
       const appointments = await Appointment.getTodayByDoctor(doctorId);
       if (req.user?.role === "Frontdesk") {
         for (const row of appointments) row.latest_diagnosis = null;
