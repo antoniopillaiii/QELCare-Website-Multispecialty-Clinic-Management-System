@@ -18,6 +18,7 @@ const bcrypt = require("bcrypt");
 const pool = require("../../../config/database");
 const emailNotifier = require("../../../shared/utils/emailNotifier");
 const smsNotifier = require("../../../shared/utils/smsNotifier");
+const { logSafeError } = require("../../../shared/utils/safeErrorLog");
 
 // OTP validity. Kept generous (10 min) because the code is emailed: transactional
 // delivery (Brevo) + inbox/spam latency can eat a minute or two, and the backend
@@ -314,7 +315,7 @@ async function sendOTP(email, options = {}) {
     }
     return delivery;
   } catch (error) {
-    console.error("sendOTP error:", error);
+    logSafeError("sendOTP error", error);
     return { success: false, status: 500, code: CODES.SERVER_ERROR, message: "Failed to send verification code." };
   }
 }
@@ -377,7 +378,7 @@ async function verifyOTP(email, code, options = {}) {
 
     return { success: true, status: 200, code: CODES.OK, message: "Verification code accepted." };
   } catch (error) {
-    console.error("verifyOTP error:", error);
+    logSafeError("verifyOTP error", error);
     return { success: false, status: 500, code: CODES.SERVER_ERROR, message: "Verification failed." };
   }
 }

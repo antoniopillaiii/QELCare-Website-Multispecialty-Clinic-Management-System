@@ -1,6 +1,10 @@
 const User = require("../models/User");
 const pool = require("../../../config/database");
 const logger = require("../../../shared/utils/activityLogger");
+const { logSafeError } = require("../../../shared/utils/safeErrorLog");
+const bcrypt = require("bcrypt");
+const tokenManager = require("../../../shared/utils/tokenManager");
+const rules = require("../../../shared/utils/profileRules");
 const {
  validateEmail,
  validatePasswordStrength,
@@ -74,11 +78,6 @@ function displayName(user) {
  return name || user.username || `User #${user.user_id}`;
 }
 
-function changedFields(before, after, fields) {
- if (!before || !after) return fields;
- return fields.filter((field) => String(before[field] || "") !== String(after[field] || ""));
-}
-
 async function writeLog(req, payload) {
  await logger.log({
  userId: req.user?.user_id || null,
@@ -92,76 +91,163 @@ const getProfile = async (req, res) => {
  if (!profile) return res.status(404).json({ success: false, message: "User not found" });
  res.status(200).json({ success: true, data: profile });
  } catch (error) {
- console.error("getProfile error:", error);
+ logSafeError("getProfile error", error);
  res.status(500).json({ success: false, message: "Failed to fetch profile" });
  }
 };
 
+// Re-authentication for an email change: a signed-in session alone isn't
+// enough to move the account (and its password-reset codes) to a new address.
+// Wrong passwords are throttled per account, since the IP limit on the sign-in
+// and password endpoints doesn't cover this one.
+const EMAIL_CHANGE_MAX_FAILURES = 5;
+const EMAIL_CHANGE_WINDOW_MS = 15 * 60 * 1000;
+const emailChangeFailures = new Map(); // user_id -> { count, since }
+
+function emailChangeRetryAfter(userId) {
+ const entry = emailChangeFailures.get(userId);
+ if (!entry) return 0;
+ const remaining = entry.since + EMAIL_CHANGE_WINDOW_MS - Date.now();
+ if (remaining <= 0) {
+ emailChangeFailures.delete(userId);
+ return 0;
+ }
+ return entry.count >= EMAIL_CHANGE_MAX_FAILURES ? Math.ceil(remaining / 1000) : 0;
+}
+
+function recordEmailChangeFailure(userId) {
+ const entry = emailChangeFailures.get(userId);
+ if (!entry || entry.since + EMAIL_CHANGE_WINDOW_MS <= Date.now()) {
+ emailChangeFailures.set(userId, { count: 1, since: Date.now() });
+ } else {
+ entry.count += 1;
+ }
+}
+
+function httpError(status, message, extra = {}) {
+ const error = new Error(message);
+ error.status = status;
+ error.extra = extra;
+ return error;
+}
+
 const updateProfile = async (req, res) => {
  try {
- const before = await User.getProfile(req.user.user_id);
- if (!before) return res.status(404).json({ success: false, message: "User not found" });
-
- const email = req.body.email ? String(req.body.email).trim().toLowerCase() : "";
- if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
- return res.status(400).json({ success: false, message: "Invalid email address" });
- }
-
- if (!VALID_GENDERS.includes(req.body.gender)) {
- return res.status(400).json({ success: false, message: "Invalid gender" });
- }
-
- if (!req.body.first_name || !req.body.last_name) {
- return res.status(400).json({
+ // Patients have their own endpoint, which confirms contact changes with an
+ // emailed code and keeps the linked patient record in sync.
+ if (req.user.role === "Patient") {
+ return res.status(403).json({
  success: false,
- message: "First name and last name are required",
+ code: "USE_PATIENT_PROFILE",
+ message: "Patients update their profile from My Profile, which verifies contact changes with a code.",
  });
  }
 
- const phoneMsg = phoneError(req.body.phone, "Phone") || phoneError(req.body.alternate_phone, "Alternate phone");
- if (phoneMsg) return res.status(400).json({ success: false, message: phoneMsg });
+ const body = req.body || {};
+ const data = {
+ first_name: rules.text(body.first_name),
+ last_name: rules.text(body.last_name),
+ middle_name: rules.text(body.middle_name),
+ suffix: rules.text(body.suffix),
+ email: rules.text(body.email).toLowerCase(),
+ phone: rules.normalizePhone(body.phone),
+ alternate_phone: rules.normalizePhone(body.alternate_phone),
+ gender: body.gender || null,
+ date_of_birth: rules.text(body.date_of_birth) || null,
+ region_code: rules.text(body.region_code),
+ province_code: rules.text(body.province_code),
+ municipality_code: rules.text(body.municipality_code),
+ barangay_code: rules.text(body.barangay_code),
+ address_line: rules.text(body.address_line),
+ };
 
- const updated = await User.updateProfile(req.user.user_id, {...req.body,
- email: email || null,
+ const errors = [
+ rules.requiredNameError(data.first_name, "First name"),
+ rules.requiredNameError(data.last_name, "Last name"),
+ rules.optionalNameError(data.middle_name, "Middle name", rules.LIMITS.middle_name),
+ rules.optionalNameError(data.suffix, "Suffix", rules.LIMITS.suffix),
+ ...(data.email ? validateEmail(data.email) : []),
+ VALID_GENDERS.includes(data.gender) ? null : "Invalid gender",
+ rules.phoneError(data.phone, "Phone"),
+ rules.phoneError(data.alternate_phone, "Alternate phone"),
+ rules.birthDateError(data.date_of_birth),
+ ...rules.addressCodeErrors(data),
+ ].filter(Boolean);
+ if (errors.length) return res.status(400).json({ success: false, message: errors[0], errors });
+
+ const currentToken = tokenManager.bearerToken(req);
+ const currentPassword = typeof body.current_password === "string" ? body.current_password : "";
+ let signedOutSessions = 0;
+
+ const result = await User.updateProfile(req.user.user_id, data, {
+ beforeWrite: async (client, { changed }) => {
+ if (!changed.includes("email")) return;
+ const retryAfter = emailChangeRetryAfter(req.user.user_id);
+ if (retryAfter) {
+ throw httpError(429, `Too many incorrect passwords. Try again in ${Math.ceil(retryAfter / 60)} minute(s).`, {
+ code: "TOO_MANY_ATTEMPTS",
+ retry_after: retryAfter,
+ });
+ }
+ if (!currentPassword) {
+ throw httpError(400, "Enter your current password to change your email.", { code: "CURRENT_PASSWORD_REQUIRED" });
+ }
+ const row = await client.query("SELECT password FROM users WHERE user_id = $1", [req.user.user_id]);
+ // 400, not 401: the client treats 401 as an expired session.
+ if (!(await bcrypt.compare(currentPassword.slice(0, 128), row.rows[0]?.password || ""))) {
+ recordEmailChangeFailure(req.user.user_id);
+ throw httpError(400, "Incorrect current password", { code: "INCORRECT_CURRENT_PASSWORD" });
+ }
+ emailChangeFailures.delete(req.user.user_id);
+ },
+ afterWrite: async (client, { changed }) => {
+ // A new sign-in email ends every other session; this one stays signed in.
+ if (changed.includes("email")) {
+ signedOutSessions = await tokenManager.revokeOtherUserTokens(req.user.user_id, currentToken, client);
+ }
+ },
  });
 
- if (!updated) return res.status(404).json({ success: false, message: "User not found" });
+ if (!result) return res.status(404).json({ success: false, message: "User not found" });
+ const { before, after, changed } = result;
 
- const fields = changedFields(before, updated, [
- "first_name",
- "last_name",
- "middle_name",
- "suffix",
- "email",
- "phone",
- "alternate_phone",
- "gender",
- "date_of_birth",
- "region_code",
- "province_code",
- "municipality_code",
- "barangay_code",
- "address_line",
- ]);
+ if (changed.length === 0) {
+ return res.status(200).json({ success: true, changed: false, message: "No changes to save.", data: after });
+ }
 
  await writeLog(req, {
  action: "PROFILE_UPDATED",
  entityType: "user",
  entityId: req.user.user_id,
- description: `${displayName(updated)} updated their profile.`,
+ description: `${displayName(after)} updated their profile (${changed.join(", ").replace(/_/g, " ")}).`,
  metadata: {
  user_id: req.user.user_id,
- changed_fields: fields,
+ changed_fields: changed,
+ ...(changed.includes("email") && {
+ email_changed: true,
+ previous_email: before.email,
+ other_sessions_signed_out: signedOutSessions,
+ }),
  },
  });
 
- res.status(200).json({ success: true, message: "Profile updated", data: updated });
- } catch (error) {
- console.error("updateProfile error:", error);
- res.status(error.status || 500).json({
- success: false,
- message: error.status ? error.message : "Failed to update profile",
+ res.status(200).json({
+ success: true,
+ changed: true,
+ message: changed.includes("email")
+ ? "Profile updated. Your other signed-in devices were signed out."
+ : "Profile updated",
+ data: after,
  });
+ } catch (error) {
+ if (error.code === "23505") {
+ return res.status(409).json({ success: false, message: "Email is already used by another account" });
+ }
+ if (error.status) {
+ return res.status(error.status).json({ success: false, message: error.message, ...(error.extra || {}) });
+ }
+ logSafeError("updateProfile error", error);
+ res.status(500).json({ success: false, message: "Failed to update profile" });
  }
 };
 
@@ -170,7 +256,7 @@ const getAllUsers = async (_req, res) => {
  const users = await User.getAllUsers();
  res.status(200).json({ success: true, data: users });
  } catch (error) {
- console.error("getAllUsers error:", error);
+ logSafeError("getAllUsers error", error);
  res.status(500).json({ success: false, message: "Failed to fetch users" });
  }
 };
@@ -206,7 +292,7 @@ const getDoctors = async (_req, res) => {
  doctors: result.rows,
  });
  } catch (error) {
- console.error("getDoctors error:", error);
+ logSafeError("getDoctors error", error);
  res.status(500).json({ success: false, message: "Failed to fetch doctors" });
  }
 };
@@ -317,7 +403,7 @@ const createUser = async (req, res) => {
 
  res.status(201).json({ success: true, message: "User created successfully", data: newUser });
  } catch (error) {
- console.error("createUser error:", error);
+ logSafeError("createUser error", error);
  res.status(500).json({ success: false, message: "Failed to create user" });
  }
 };
@@ -355,7 +441,7 @@ const updateUserStatus = async (req, res) => {
 
  res.status(200).json({ success: true, message: `User status updated to ${status}`, data: updated });
  } catch (error) {
- console.error("updateUserStatus error:", error);
+ logSafeError("updateUserStatus error", error);
  res.status(500).json({ success: false, message: "Failed to update status" });
  }
 };
@@ -408,7 +494,7 @@ const updateUserRole = async (req, res) => {
 
  res.status(200).json({ success: true, message: "User role updated", data: updated });
  } catch (error) {
- console.error("updateUserRole error:", error);
+ logSafeError("updateUserRole error", error);
  res.status(500).json({ success: false, message: "Failed to update role" });
  }
 };
@@ -461,7 +547,7 @@ const updateUserDetails = async (req, res) => {
 
  res.status(200).json({ success: true, message: "User details updated", data: updated });
  } catch (error) {
- console.error("updateUserDetails error:", error);
+ logSafeError("updateUserDetails error", error);
  res.status(500).json({ success: false, message: "Failed to update user details" });
  }
 };
@@ -471,7 +557,7 @@ const getRoles = async (_req, res) => {
  const result = await pool.query("SELECT role_id, role_name FROM roles ORDER BY role_id");
  res.status(200).json({ success: true, data: result.rows });
  } catch (error) {
- console.error("getRoles error:", error);
+ logSafeError("getRoles error", error);
  res.status(500).json({ success: false, message: "Failed to fetch roles" });
  }
 };

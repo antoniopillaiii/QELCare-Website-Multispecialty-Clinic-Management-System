@@ -22,6 +22,8 @@ const logger = require("../../../shared/utils/activityLogger");
 const { authenticate, authorize } = require("../../../shared/middleware/tokenMiddleware");
 const authService = require("../services/authService");
 const { ageOnManilaToday } = require("../../../shared/utils/manilaTime");
+const { logSafeError } = require("../../../shared/utils/safeErrorLog");
+const profileRules = require("../../../shared/utils/profileRules");
 const {
   validateEmail,
   validateOTPCode,
@@ -139,7 +141,7 @@ function validateRegistration(body) {
   const lastNameRaw = clean(body.last_name);
   const firstName = toTitleCase(firstNameRaw); // "kelly" -> "Kelly"
   const lastName = toTitleCase(lastNameRaw);
-  const phone = clean(body.phone);
+  const phone = profileRules.normalizePhone(body.phone); // stored without spaces/hyphens, like the profile
   const dateOfBirth = clean(body.date_of_birth);
 
   const errors = [];
@@ -306,7 +308,7 @@ router.post("/register", async (req, res) => {
     try {
       await client.query("ROLLBACK");
     } catch (_) {}
-    console.error("Patient register error:", err);
+    logSafeError("Patient register error", err);
     return res.status(500).json({ success: false, code: "SERVER_ERROR", message: "Failed to register patient account." });
   } finally {
     client.release();
@@ -354,7 +356,7 @@ router.post("/register/resend", async (req, res) => {
       message: result.message,
     });
   } catch (err) {
-    console.error("Resend patient registration OTP error:", err);
+    logSafeError("Resend patient registration OTP error", err);
     return res.status(500).json({ success: false, code: "SERVER_ERROR", message: "Failed to resend verification code." });
   }
 });
@@ -451,7 +453,7 @@ router.post("/register/verify", async (req, res) => {
     try {
       await client.query("ROLLBACK");
     } catch (_) {}
-    console.error("Verify patient registration error:", err);
+    logSafeError("Verify patient registration error", err);
     return res.status(500).json({ success: false, code: "SERVER_ERROR", message: "Failed to verify patient account." });
   } finally {
     client.release();
@@ -483,7 +485,7 @@ router.post("/profile/otp", authenticate, authorize(["Patient"]), async (req, re
       message: result.message,
     });
   } catch (err) {
-    console.error("Profile OTP send error:", err);
+    logSafeError("Profile OTP send error", err);
     return res.status(500).json({ success: false, code: "SERVER_ERROR", message: "Failed to send profile update code." });
   }
 });
@@ -512,7 +514,7 @@ router.post("/profile/otp/check", authenticate, authorize(["Patient"]), async (r
       attempts_left: result.attempts_left,
     });
   } catch (err) {
-    console.error("Profile OTP check error:", err);
+    logSafeError("Profile OTP check error", err);
     return res.status(500).json({ success: false, code: "SERVER_ERROR", message: "Failed to verify profile update code." });
   }
 });
@@ -520,39 +522,85 @@ router.post("/profile/otp/check", authenticate, authorize(["Patient"]), async (r
 // ---------------------------------------------------------------------------
 // PUT /auth/patient/profile
 // ---------------------------------------------------------------------------
+// Every patient profile save, from the website or the mobile app, goes through
+// here. Changing the username, email, phone, alternate phone or address needs
+// a valid emailed code (POST /profile/otp); the check is made here, so no
+// client can skip it. The linked patients row is updated in the same
+// transaction. Region/province/municipality/barangay codes are only changed
+// when the request includes them (the mobile form doesn't) and count as
+// address changes.
+const ADDRESS_CODE_KEYS = profileRules.ADDRESS_CODE_FIELDS.map(([key]) => key);
+const SENSITIVE_PROFILE_FIELDS = ["username", "email", "phone", "alternate_phone", "address_line", ...ADDRESS_CODE_KEYS];
+// Account field -> linked patients column(s).
+const PATIENT_RECORD_COLUMNS = {
+  first_name: ["first_name"],
+  last_name: ["last_name"],
+  middle_name: ["middle_name"],
+  suffix: ["suffix"],
+  email: ["email"],
+  phone: ["phone", "contact"],
+  gender: ["gender"],
+  date_of_birth: ["date_of_birth"],
+  address_line: ["address"],
+};
+
+// Value used to decide whether a field changed: null and "" are the same,
+// email case and phone spacing don't count as a change.
+function comparableProfileValue(field, value) {
+  const textValue = profileRules.text(value);
+  if (field === "email" || field === "username") return textValue.toLowerCase();
+  if (field === "phone" || field === "alternate_phone") return profileRules.normalizePhone(textValue);
+  return textValue;
+}
+
 router.put("/profile", authenticate, authorize(["Patient"]), async (req, res) => {
   const client = await pool.connect();
   try {
     const userId = req.user.user_id;
-    const username = clean(req.body.username).toLowerCase();
-    const email = normalizeEmail(req.body.email);
-    const firstName = clean(req.body.first_name);
-    const lastName = clean(req.body.last_name);
-    const middleName = clean(req.body.middle_name);
-    const suffix = clean(req.body.suffix);
-    const phone = clean(req.body.phone);
-    const alternatePhone = clean(req.body.alternate_phone);
-    const gender = clean(req.body.gender) || null;
-    const dateOfBirth = clean(req.body.date_of_birth) || null;
-    const addressLine = clean(req.body.address_line);
-    const otpCode = clean(req.body.otp_code);
+    const body = req.body || {};
+    const username = profileRules.text(body.username).toLowerCase();
+    const email = normalizeEmail(body.email);
+    const firstName = profileRules.text(body.first_name);
+    const lastName = profileRules.text(body.last_name);
+    const middleName = profileRules.text(body.middle_name);
+    const suffix = profileRules.text(body.suffix);
+    const phone = profileRules.normalizePhone(body.phone);
+    const alternatePhone = profileRules.normalizePhone(body.alternate_phone);
+    const gender = profileRules.text(body.gender) || null;
+    const dateOfBirth = profileRules.text(body.date_of_birth) || null;
+    const addressLine = profileRules.text(body.address_line);
+    const otpCode = profileRules.text(body.otp_code);
+    const codes = Object.fromEntries(
+      ADDRESS_CODE_KEYS.filter((key) => body[key] !== undefined).map((key) => [key, profileRules.text(body[key])])
+    );
 
     const errors = [];
     if (!username) errors.push("Username is required.");
     if (username && !validUsername(username)) errors.push("Username must start with a letter and be 3-50 characters using letters, numbers, dot, underscore, or hyphen.");
     if (!email || !isEmail(email)) errors.push("A valid email is required.");
-    if (!firstName) errors.push("First name is required.");
-    if (!lastName) errors.push("Last name is required.");
-    if (gender && !["Male", "Female", "Other"].includes(gender)) errors.push("Invalid gender.");
-    if (phone && !validPhone(phone)) errors.push("Invalid phone number.");
-    if (alternatePhone && !validPhone(alternatePhone)) errors.push("Invalid alternate phone number.");
-    validateSqlLengths(errors, { username, email, firstName, lastName, middleName, suffix, phone, alternatePhone, gender });
+    errors.push(
+      ...[
+        profileRules.requiredNameError(firstName, "First name"),
+        profileRules.requiredNameError(lastName, "Last name"),
+        profileRules.optionalNameError(middleName, "Middle name", LIMITS.middle_name),
+        profileRules.optionalNameError(suffix, "Suffix", LIMITS.suffix),
+        gender && !["Male", "Female", "Other"].includes(gender) ? "Invalid gender." : null,
+        profileRules.phoneError(phone, "Phone"),
+        profileRules.phoneError(alternatePhone, "Alternate phone"),
+        profileRules.birthDateError(dateOfBirth),
+      ].filter(Boolean),
+      ...profileRules.addressCodeErrors(codes)
+    );
+    validateSqlLengths(errors, { username, email });
     if (errors.length > 0) return res.status(400).json({ success: false, errors, message: errors[0] });
 
     await client.query("BEGIN");
 
     const currentResult = await client.query(
-      `SELECT u.user_id, u.username, u.email, u.phone, u.alternate_phone, ua.address_line
+      `SELECT u.user_id, u.username, u.email, u.first_name, u.last_name, u.middle_name, u.suffix,
+              u.phone, u.alternate_phone, u.gender, TO_CHAR(u.date_of_birth, 'YYYY-MM-DD') AS date_of_birth,
+              u.profile_picture, ua.region_code, ua.province_code, ua.municipality_code, ua.barangay_code,
+              ua.address_line
          FROM users u
          LEFT JOIN user_addresses ua ON ua.user_id = u.user_id
         WHERE u.user_id = $1
@@ -564,22 +612,52 @@ router.put("/profile", authenticate, authorize(["Patient"]), async (req, res) =>
       await client.query("ROLLBACK");
       return res.status(404).json({ success: false, code: "NO_ACCOUNT", message: "User not found." });
     }
+    // A date of birth given at registration can be corrected, not removed.
+    if (!dateOfBirth && current.date_of_birth) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ success: false, message: "Date of birth is required." });
+    }
 
-    const sensitiveChanged = [
-      [username, current.username],
-      [email, current.email],
-      [phone, current.phone],
-      [alternatePhone, current.alternate_phone],
-      [addressLine, current.address_line],
-    ].some(([next, prev]) => String(next || "").trim() !== String(prev || "").trim());
+    const next = {
+      username,
+      email,
+      first_name: firstName,
+      last_name: lastName,
+      middle_name: middleName,
+      suffix,
+      phone,
+      alternate_phone: alternatePhone,
+      gender,
+      date_of_birth: dateOfBirth,
+      ...Object.fromEntries(ADDRESS_CODE_KEYS.map((key) => [key, key in codes ? codes[key] : profileRules.text(current[key])])),
+      address_line: addressLine,
+    };
+    const changed = Object.keys(next).filter(
+      (field) => comparableProfileValue(field, next[field]) !== comparableProfileValue(field, current[field])
+    );
 
+    if (changed.length === 0) {
+      await client.query("ROLLBACK");
+      return res.json({ success: true, changed: false, message: "No changes to save.", data: current });
+    }
+
+    const sensitiveChanged = changed.some((field) => SENSITIVE_PROFILE_FIELDS.includes(field));
     if (sensitiveChanged) {
+      if (!otpCode) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          success: false,
+          code: "OTP_REQUIRED",
+          message: "Enter the verification code sent to your email to change your username, email, phone, or address.",
+        });
+      }
       const otp = await authService.verifyOTP(current.email, otpCode, {
         client,
         purpose: OTP_PURPOSE_PROFILE,
         consume: true,
       });
       if (!otp.success) {
+        // Commit so the failed attempt counts against the code.
         await client.query("COMMIT");
         return res.status(otp.status || 400).json({ success: false, code: otp.code, message: otp.message, attempts_left: otp.attempts_left });
       }
@@ -619,12 +697,26 @@ router.put("/profile", authenticate, authorize(["Patient"]), async (req, res) =>
     );
 
     await client.query(
-      `INSERT INTO user_addresses (user_id, address_line)
-       VALUES ($1, $2)
-       ON CONFLICT (user_id) DO UPDATE SET address_line = EXCLUDED.address_line, updated_at = NOW()`,
-      [userId, addressLine || null]
+      `INSERT INTO user_addresses (user_id, region_code, province_code, municipality_code, barangay_code, address_line)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (user_id) DO UPDATE SET
+         region_code = EXCLUDED.region_code,
+         province_code = EXCLUDED.province_code,
+         municipality_code = EXCLUDED.municipality_code,
+         barangay_code = EXCLUDED.barangay_code,
+         address_line = EXCLUDED.address_line,
+         updated_at = NOW()`,
+      [userId, next.region_code || null, next.province_code || null, next.municipality_code || null, next.barangay_code || null, addressLine || null]
     );
 
+    // Copy the changed fields to the linked patient record. Only changed ones:
+    // the clinic may have filled patient-record fields (date of birth,
+    // address) that the account itself leaves blank, and an unrelated edit
+    // must not overwrite those with blanks.
+    const patientSets = changed
+      .flatMap((field) => PATIENT_RECORD_COLUMNS[field] || [])
+      .concat(changed.includes("first_name") || changed.includes("last_name") ? ["name"] : [])
+      .map((column) => `${column} = EXCLUDED.${column}`);
     const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
     await client.query(
       `INSERT INTO patients
@@ -632,17 +724,7 @@ router.put("/profile", authenticate, authorize(["Patient"]), async (req, res) =>
        VALUES
          ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, $11, TRUE, $1, NOW(), NOW())
        ON CONFLICT (user_id) DO UPDATE SET
-         first_name    = EXCLUDED.first_name,
-         last_name     = EXCLUDED.last_name,
-         middle_name   = EXCLUDED.middle_name,
-         suffix        = EXCLUDED.suffix,
-         name          = EXCLUDED.name,
-         email         = EXCLUDED.email,
-         phone         = EXCLUDED.phone,
-         contact       = EXCLUDED.contact,
-         gender        = EXCLUDED.gender,
-         date_of_birth = EXCLUDED.date_of_birth,
-         address       = EXCLUDED.address,
+         ${patientSets.map((set) => `${set},`).join("\n         ")}
          is_active     = TRUE,
          updated_at    = NOW()`,
       [userId, firstName, lastName, middleName || null, suffix || null, fullName, email, phone || null, gender, dateOfBirth, addressLine || null]
@@ -650,7 +732,8 @@ router.put("/profile", authenticate, authorize(["Patient"]), async (req, res) =>
 
     const updated = await client.query(
       `SELECT u.user_id, u.username, u.email, u.first_name, u.last_name, u.middle_name, u.suffix,
-              u.phone, u.alternate_phone, u.gender, u.date_of_birth, u.profile_picture,
+              u.phone, u.alternate_phone, u.gender, TO_CHAR(u.date_of_birth, 'YYYY-MM-DD') AS date_of_birth,
+              u.profile_picture, ua.region_code, ua.province_code, ua.municipality_code, ua.barangay_code,
               ua.address_line
          FROM users u
          LEFT JOIN user_addresses ua ON ua.user_id = u.user_id
@@ -665,17 +748,24 @@ router.put("/profile", authenticate, authorize(["Patient"]), async (req, res) =>
       action: "PROFILE_UPDATED",
       entityType: "user",
       entityId: userId,
-      description: `${username} updated their patient mobile profile.`,
+      description: `${username} updated their profile (${changed.join(", ").replace(/_/g, " ")}).`,
       ip: logger.getIP(req),
-      metadata: { sensitive_changed: sensitiveChanged },
+      metadata: {
+        changed_fields: changed,
+        sensitive_changed: sensitiveChanged,
+        ...(changed.includes("email") && { previous_email: current.email }),
+      },
     });
 
-    return res.json({ success: true, message: "Profile updated.", data: updated.rows[0] });
+    return res.json({ success: true, changed: true, message: "Profile updated.", data: updated.rows[0] });
   } catch (err) {
     try {
       await client.query("ROLLBACK");
     } catch (_) {}
-    console.error("Patient profile update error:", err);
+    if (err.code === "23505") {
+      return res.status(409).json({ success: false, code: "DUPLICATE", message: "Username or email is already used by another account." });
+    }
+    logSafeError("Patient profile update error", err);
     return res.status(500).json({ success: false, code: "SERVER_ERROR", message: "Failed to update profile." });
   } finally {
     client.release();

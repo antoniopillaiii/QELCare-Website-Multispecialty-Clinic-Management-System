@@ -1,8 +1,37 @@
 const pool = require("../../../config/database");
+const { normalizePhone } = require("../../../shared/utils/profileRules");
+
+// Fields a user edits on their own profile, in the order changes are reported.
+const PROFILE_FIELDS = [
+ "first_name",
+ "last_name",
+ "middle_name",
+ "suffix",
+ "email",
+ "phone",
+ "alternate_phone",
+ "gender",
+ "date_of_birth",
+ "region_code",
+ "province_code",
+ "municipality_code",
+ "barangay_code",
+ "address_line",
+];
+
+// Value used to decide whether a field changed: null and "" are the same,
+// email case and phone spacing don't count as a change.
+function comparable(field, value) {
+ const textValue = value === undefined || value === null ? "" : String(value).trim();
+ if (field === "email") return textValue.toLowerCase();
+ if (field === "phone" || field === "alternate_phone") return normalizePhone(textValue);
+ return textValue;
+}
 
 class User {
- static async getProfile(userId) {
- const result = await pool.query(
+ // db: pool or a transaction client; lock: take the user row's lock (FOR UPDATE).
+ static async getProfile(userId, db = pool, { lock = false } = {}) {
+ const result = await db.query(
  `SELECT
  u.user_id,
  u.username,
@@ -37,7 +66,7 @@ class User {
  LEFT JOIN roles r ON u.role_id = r.role_id
  LEFT JOIN specialties s ON u.specialty_id = s.specialty_id
  LEFT JOIN user_addresses ua ON u.user_id = ua.user_id
- WHERE u.user_id = $1`,
+ WHERE u.user_id = $1${lock ? " FOR UPDATE OF u" : ""}`,
  [userId]
  );
  return result.rows[0] || null;
@@ -83,47 +112,39 @@ class User {
  return result.rows[0] || null;
  }
 
- static async updateProfile(userId, profileData) {
+ // Saves the caller's own profile in one transaction. `data` holds validated,
+ // normalized values (an empty email keeps the current one). The user row is
+ // locked while the change is compared and written, and `before`/`after` are
+ // read inside that transaction, so the caller's audit entry describes exactly
+ // this change even when two saves run at once. Nothing is written when no
+ // field changed. Hooks run inside the transaction (a throw rolls it back):
+ // beforeWrite(client, { before, changed }) and afterWrite(client, { before, changed }).
+ // Returns null (no such user) or { before, after, changed }.
+ static async updateProfile(userId, data, hooks = {}) {
  const client = await pool.connect();
  try {
  await client.query("BEGIN");
 
- const currentResult = await client.query(
- "SELECT email FROM users WHERE user_id = $1",
- [userId]
- );
-
- if (currentResult.rows.length === 0) {
+ const before = await User.getProfile(userId, client, { lock: true });
+ if (!before) {
  await client.query("ROLLBACK");
  return null;
  }
 
- const {
- first_name,
- last_name,
- middle_name,
- suffix,
- gender,
- phone,
- alternate_phone,
- email,
- date_of_birth,
- region_code,
- province_code,
- municipality_code,
- barangay_code,
- address_line,
- } = profileData;
+ const next = { ...data, email: data.email || before.email };
+ const changed = PROFILE_FIELDS.filter((field) => comparable(field, before[field]) !== comparable(field, next[field]));
+ if (changed.length === 0) {
+ await client.query("ROLLBACK");
+ return { before, after: before, changed };
+ }
 
- const normalizedEmail = email ? String(email).trim().toLowerCase() : null;
- const currentEmail = currentResult.rows[0].email || null;
+ if (hooks.beforeWrite) await hooks.beforeWrite(client, { before, changed });
 
- if (normalizedEmail && normalizedEmail !== String(currentEmail || "").toLowerCase()) {
+ if (changed.includes("email")) {
  const duplicate = await client.query(
  "SELECT user_id FROM users WHERE LOWER(email) = LOWER($1) AND user_id <> $2",
- [normalizedEmail, userId]
+ [next.email, userId]
  );
-
  if (duplicate.rows.length > 0) {
  const error = new Error("Email is already used by another account");
  error.status = 409;
@@ -140,24 +161,24 @@ class User {
  gender = $5,
  phone = $6,
  alternate_phone = $7,
- email = COALESCE($8, email),
+ email = $8::text,
  date_of_birth = $9,
  email_changed_at = CASE
- WHEN $8::text IS NOT NULL AND LOWER(email) <> LOWER($8::text) THEN NOW()
+ WHEN LOWER(email) <> LOWER($8::text) THEN NOW()
  ELSE email_changed_at
  END,
  updated_at = NOW()
  WHERE user_id = $10`,
  [
- first_name ? String(first_name).trim() : null,
- last_name ? String(last_name).trim() : null,
- middle_name ? String(middle_name).trim() : null,
- suffix ? String(suffix).trim() : null,
- gender || null,
- phone ? String(phone).trim() : null,
- alternate_phone ? String(alternate_phone).trim() : null,
- normalizedEmail,
- date_of_birth || null,
+ next.first_name,
+ next.last_name,
+ next.middle_name || null,
+ next.suffix || null,
+ next.gender || null,
+ next.phone || null,
+ next.alternate_phone || null,
+ next.email,
+ next.date_of_birth || null,
  userId,
  ]
  );
@@ -175,16 +196,19 @@ class User {
  updated_at = NOW()`,
  [
  userId,
- region_code ? String(region_code).trim() : null,
- province_code ? String(province_code).trim() : null,
- municipality_code ? String(municipality_code).trim() : null,
- barangay_code ? String(barangay_code).trim() : null,
- address_line ? String(address_line).trim() : null,
+ next.region_code || null,
+ next.province_code || null,
+ next.municipality_code || null,
+ next.barangay_code || null,
+ next.address_line || null,
  ]
  );
 
+ if (hooks.afterWrite) await hooks.afterWrite(client, { before, changed });
+
+ const after = await User.getProfile(userId, client);
  await client.query("COMMIT");
- return await User.getProfile(userId);
+ return { before, after, changed };
  } catch (error) {
  await client.query("ROLLBACK");
  throw error;

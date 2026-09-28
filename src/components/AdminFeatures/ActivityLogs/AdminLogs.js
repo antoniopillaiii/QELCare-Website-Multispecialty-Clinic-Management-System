@@ -1,10 +1,12 @@
 // FILE: src/components/AdminFeatures/ActivityLogs/AdminLogs.js
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { X } from "lucide-react";
 import MainLayout from "../../Layout/MainLayout";
 import Pagination from "../../common/Pagination";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C as COLORS } from "../../../utils/adminTheme";
+import { CLINIC_TZ } from "../../../utils/manilaDate";
 
 const EXPORT_COLUMNS = [
   { header: "Time", value: (log) => formatDateTime(log.created_at) },
@@ -62,6 +64,7 @@ function formatDateTime(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Not recorded";
   return new Intl.DateTimeFormat("en-PH", {
+    timeZone: CLINIC_TZ,
     month: "short",
     day: "2-digit",
     year: "numeric",
@@ -75,6 +78,7 @@ function formatShortDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Not recorded";
   return new Intl.DateTimeFormat("en-PH", {
+    timeZone: CLINIC_TZ,
     month: "short",
     day: "2-digit",
     hour: "2-digit",
@@ -90,6 +94,14 @@ function actorName(log) {
 function safeNumber(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+// Number of filters (other than rows per page) that narrow the list.
+function countFilters(filters) {
+  return ["search", "action", "entity_type", "user_id", "from", "to"].reduce((count, key) => {
+    const value = key === "search" ? filters[key].trim() : filters[key];
+    return value !== DEFAULT_FILTERS[key] ? count + 1 : count;
+  }, 0);
 }
 
 function buildQuery(filters, page) {
@@ -168,8 +180,11 @@ export default function AdminLogs() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [metaLoading, setMetaLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(null); // { kind: "filter" | "load", message }
   const [selectedLog, setSelectedLog] = useState(null);
+  // Only the latest request may update the page, so a slow earlier response
+  // (old filters or page) can't overwrite newer results.
+  const requestSeq = useRef(0);
 
   const loadMeta = useCallback(async () => {
     setMetaLoading(true);
@@ -189,25 +204,34 @@ export default function AdminLogs() {
   }, []);
 
   const loadLogs = useCallback(async () => {
+    const seq = ++requestSeq.current;
     setLoading(true);
-    setError("");
+    setError(null);
     try {
       const query = buildQuery(queryFilters, page);
       const res = await authFetch(`/activity-logs?${query}`);
       if (!res) return;
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok || data.success === false) {
-        throw new Error(data.message || "Failed to load activity logs.");
+        const failure = new Error(data.message || "Failed to load activity logs.");
+        failure.kind = res.status === 400 ? "filter" : "load";
+        throw failure;
       }
+      if (seq !== requestSeq.current) return;
 
       setLogs(Array.isArray(data.data) ? data.data : []);
       setSummary(data.summary || {});
       setPagination(data.pagination || { page, limit: Number(queryFilters.limit), total: 0, pages: 1 });
     } catch (err) {
+      if (seq !== requestSeq.current) return;
       setLogs([]);
-      setError(err.message || "Failed to load activity logs.");
+      const offline = err instanceof TypeError; // fetch() network failure
+      setError({
+        kind: err.kind || "load",
+        message: offline ? "The server couldn't be reached. Check your connection and try again." : err.message || "Failed to load activity logs.",
+      });
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
   }, [page, queryFilters]);
 
@@ -219,12 +243,18 @@ export default function AdminLogs() {
     loadLogs();
   }, [loadLogs]);
 
-  const filterCount = useMemo(() => {
-    return ["search", "action", "entity_type", "user_id", "from", "to"].reduce((count, key) => {
-      const emptyValue = DEFAULT_FILTERS[key];
-      return draftFilters[key] !== emptyValue ? count + 1 : count;
-    }, 0);
-  }, [draftFilters]);
+  const filterCount = useMemo(() => countFilters(draftFilters), [draftFilters]);
+  const appliedFilterCount = useMemo(() => countFilters(queryFilters), [queryFilters]);
+
+  // Details dialog: Escape closes it.
+  useEffect(() => {
+    if (!selectedLog) return undefined;
+    const onKey = (event) => {
+      if (event.key === "Escape") setSelectedLog(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedLog]);
 
   function updateDraft(key, value) {
     setDraftFilters((current) => ({ ...current, [key]: value }));
@@ -232,8 +262,12 @@ export default function AdminLogs() {
 
   function applyFilters(event) {
     event.preventDefault();
+    if (draftFilters.from && draftFilters.to && draftFilters.from > draftFilters.to) {
+      setError({ kind: "filter", message: "From date must be on or before the To date." });
+      return;
+    }
     setPage(1);
-    setQueryFilters(draftFilters);
+    setQueryFilters({ ...draftFilters });
   }
 
   function clearFilters() {
@@ -282,7 +316,11 @@ export default function AdminLogs() {
               <p>
                 {loading
                   ? "Loading activity..."
-                  : `${safeNumber(pagination.total).toLocaleString()} log${safeNumber(pagination.total) === 1 ? "" : "s"} found`}
+                  : error
+                    ? error.kind === "filter"
+                      ? "Check the filters"
+                      : "Activity logs couldn't be loaded"
+                    : `${safeNumber(pagination.total).toLocaleString()} log${safeNumber(pagination.total) === 1 ? "" : "s"} found`}
               </p>
             </div>
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -293,7 +331,7 @@ export default function AdminLogs() {
                 sheetTitle="Activity Logs"
                 columns={EXPORT_COLUMNS}
                 rows={logs}
-                disabled={loading}
+                disabled={loading || Boolean(error)}
               />
               <button className="al-icon-button" type="button" onClick={loadLogs} title="Refresh logs">
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -404,11 +442,31 @@ export default function AdminLogs() {
             </div>
           </form>
 
-          {error && <div className="al-error">{error}</div>}
-
           <div className="al-table-wrap">
             {loading ? (
               <SkeletonRows />
+            ) : error ? (
+              <div className="al-empty" role="alert">
+                <h3>{error.kind === "filter" ? "Check the filters" : "Couldn't load activity logs"}</h3>
+                <p>{error.message}</p>
+                {error.kind === "filter" ? (
+                  <button className="al-secondary al-empty-action" type="button" onClick={clearFilters}>
+                    Clear Filters
+                  </button>
+                ) : (
+                  <button className="al-secondary al-empty-action" type="button" onClick={loadLogs}>
+                    Try Again
+                  </button>
+                )}
+              </div>
+            ) : logs.length === 0 && appliedFilterCount > 0 ? (
+              <div className="al-empty">
+                <h3>No logs match these filters</h3>
+                <p>Try a different search, action, user or date range.</p>
+                <button className="al-secondary al-empty-action" type="button" onClick={clearFilters}>
+                  Clear Filters
+                </button>
+              </div>
             ) : logs.length === 0 ? (
               <div className="al-empty">
                 <div className="al-empty-icon">
@@ -475,7 +533,7 @@ export default function AdminLogs() {
             )}
           </div>
 
-          {!loading && (
+          {!loading && !error && (
             <Pagination
               page={currentPage}
               totalPages={totalPages}
@@ -489,14 +547,20 @@ export default function AdminLogs() {
 
         {selectedLog && (
           <div className="al-modal-backdrop" role="presentation" onMouseDown={() => setSelectedLog(null)}>
-            <div className="al-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+            <div
+              className="al-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="al-modal-title"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
               <div className="al-modal-head">
                 <div>
-                  <h3>{formatAction(selectedLog.action)}</h3>
-                  <p>Log #{selectedLog.log_id} recorded {formatDateTime(selectedLog.created_at)}</p>
+                  <h3 id="al-modal-title">{formatAction(selectedLog.action)}</h3>
+                  <p>Log #{selectedLog.log_id} recorded {formatDateTime(selectedLog.created_at)} (Philippine time)</p>
                 </div>
-                <button type="button" onClick={() => setSelectedLog(null)} aria-label="Close details">
-                  x
+                <button type="button" onClick={() => setSelectedLog(null)} aria-label="Close details" autoFocus>
+                  <X size={18} />
                 </button>
               </div>
 
@@ -707,17 +771,6 @@ export default function AdminLogs() {
           color: ${COLORS.blue};
         }
 
-        .al-error {
-          margin: 16px 22px 0;
-          padding: 12px 14px;
-          background: #fff0f0;
-          color: #8f2f2f;
-          border: 1px solid #ffd1d1;
-          border-radius: 10px;
-          font-size: 13px;
-          font-weight: 700;
-        }
-
         .al-table-wrap {
           overflow-x: auto;
         }
@@ -798,6 +851,11 @@ export default function AdminLogs() {
           color: #3e4c5b;
           max-width: 420px;
           line-height: 1.45;
+          overflow-wrap: anywhere;
+        }
+
+        .al-empty-action {
+          margin-top: 14px;
         }
 
         .al-actions {
@@ -908,6 +966,9 @@ export default function AdminLogs() {
         }
 
         .al-modal-head button {
+          display: grid;
+          place-items: center;
+          flex: 0 0 auto;
           width: 34px;
           height: 34px;
           border: 1px solid #dce6f1;
@@ -965,6 +1026,11 @@ export default function AdminLogs() {
           color: #24364a;
           font-size: 13px;
           line-height: 1.55;
+        }
+
+        .al-detail-block p {
+          overflow-wrap: anywhere;
+          white-space: pre-wrap;
         }
 
         .al-detail-block pre {

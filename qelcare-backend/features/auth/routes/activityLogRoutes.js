@@ -2,35 +2,50 @@
 const router = require("express").Router();
 const { authenticate, authorize } = require("../../../shared/middleware/tokenMiddleware");
 const pool = require("../../../config/database");
+const { logSafeError } = require("../../../shared/utils/safeErrorLog");
+const { isPositiveInt, escapeLike } = require("../../../shared/utils/requestValidation");
+const { isValidDateString } = require("../../../shared/utils/manilaTime");
 
 router.use(authenticate, authorize(["Admin"]));
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
+const MAX_SEARCH = 200;
+const CODE_PATTERN = /^[A-Za-z0-9_]+$/;
 
-function toPositiveInt(value, fallback) {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
+// Reads and validates the list filters. Anything malformed is a 400 with the
+// reason instead of being silently dropped (which showed unfiltered results
+// under a filter the admin believed was applied) or reaching SQL ("2026-02-31"
+// used to be a 500). Returns { error } or { page, limit, where, params }.
+function parseQuery(query) {
+  const single = (key) => {
+    const value = query[key];
+    if (value === undefined) return "";
+    if (typeof value !== "string") return null; // repeated/array parameter
+    return value.trim();
+  };
 
-function isDateOnly(value) {
-  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
-}
+  const page = single("page");
+  if (page === null || (page && !isPositiveInt(page))) return { error: "Page must be a positive whole number." };
+  const limitText = single("limit");
+  if (limitText === null || (limitText && !isPositiveInt(limitText))) return { error: "Rows per page must be a positive whole number." };
 
-function buildFilters(query) {
   const conditions = [];
   const params = [];
 
-  const search = String(query.search || "").trim();
+  const search = single("search");
+  if (search === null) return { error: "Invalid search." };
+  if (search.length > MAX_SEARCH) return { error: `Search must be ${MAX_SEARCH} characters or fewer.` };
   if (search) {
-    params.push(`%${search}%`);
+    // Literal match: "%" and "_" are searched for, not used as wildcards.
+    params.push(`%${escapeLike(search)}%`);
     const p = `$${params.length}`;
     conditions.push(`(
       al.action ILIKE ${p}
       OR COALESCE(al.entity_type, '') ILIKE ${p}
       OR CAST(al.entity_id AS TEXT) ILIKE ${p}
       OR COALESCE(al.description, '') ILIKE ${p}
-      OR CAST(al.ip_address AS TEXT) ILIKE ${p}
+      OR COALESCE(host(al.ip_address), '') ILIKE ${p}
       OR COALESCE(u.username, '') ILIKE ${p}
       OR COALESCE(u.email, '') ILIKE ${p}
       OR COALESCE(u.first_name, '') ILIKE ${p}
@@ -39,35 +54,52 @@ function buildFilters(query) {
     )`);
   }
 
-  const action = String(query.action || "").trim();
+  const action = single("action");
+  if (action === null || (action && (action.length > 80 || !CODE_PATTERN.test(action)))) {
+    return { error: "Invalid action filter." };
+  }
   if (action) {
     params.push(action.toUpperCase());
     conditions.push(`al.action = $${params.length}`);
   }
 
-  const entityType = String(query.entity_type || "").trim();
+  const entityType = single("entity_type");
+  if (entityType === null || (entityType && (entityType.length > 50 || !CODE_PATTERN.test(entityType)))) {
+    return { error: "Invalid entity filter." };
+  }
   if (entityType) {
     params.push(entityType);
     conditions.push(`LOWER(COALESCE(al.entity_type, 'system')) = LOWER($${params.length})`);
   }
 
-  const userId = Number.parseInt(query.user_id, 10);
-  if (Number.isInteger(userId) && userId > 0) {
-    params.push(userId);
+  const userId = single("user_id");
+  if (userId === null || (userId && !isPositiveInt(userId))) return { error: "Invalid user filter." };
+  if (userId) {
+    params.push(Number(userId));
     conditions.push(`al.user_id = $${params.length}`);
   }
 
-  if (isDateOnly(query.from)) {
-    params.push(query.from);
-    conditions.push(`al.created_at >= $${params.length}::date`);
-  }
+  const from = single("from");
+  const to = single("to");
+  if (from === null || (from && !isValidDateString(from))) return { error: "From date must be a valid date (YYYY-MM-DD)." };
+  if (to === null || (to && !isValidDateString(to))) return { error: "To date must be a valid date (YYYY-MM-DD)." };
+  if (from && to && from > to) return { error: "From date must be on or before the To date." };
 
-  if (isDateOnly(query.to)) {
-    params.push(query.to);
-    conditions.push(`al.created_at < ($${params.length}::date + INTERVAL '1 day')`);
+  // Dates are clinic (Asia/Manila) calendar days whatever the database
+  // session's time zone: from 00:00 Manila on "from" up to, not including,
+  // 00:00 Manila on the day after "to".
+  if (from) {
+    params.push(from);
+    conditions.push(`al.created_at >= ($${params.length}::date::timestamp AT TIME ZONE 'Asia/Manila')`);
+  }
+  if (to) {
+    params.push(to);
+    conditions.push(`al.created_at < (($${params.length}::date + 1)::timestamp AT TIME ZONE 'Asia/Manila')`);
   }
 
   return {
+    page: page ? Number(page) : 1,
+    limit: Math.min(limitText ? Number(limitText) : DEFAULT_LIMIT, MAX_LIMIT),
     where: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "",
     params,
   };
@@ -75,11 +107,10 @@ function buildFilters(query) {
 
 router.get("/", async (req, res) => {
   try {
-    const page = toPositiveInt(req.query.page, 1);
-    const rawLimit = toPositiveInt(req.query.limit, DEFAULT_LIMIT);
-    const limit = Math.min(rawLimit, MAX_LIMIT);
+    const parsed = parseQuery(req.query);
+    if (parsed.error) return res.status(400).json({ success: false, message: parsed.error });
+    const { page, limit, where, params } = parsed;
     const offset = (page - 1) * limit;
-    const { where, params } = buildFilters(req.query);
 
     const fromClause = `
       FROM activity_logs al
@@ -111,7 +142,7 @@ router.get("/", async (req, res) => {
          al.entity_type,
          al.entity_id,
          al.description,
-         al.ip_address::text AS ip_address,
+         host(al.ip_address) AS ip_address,
          al.metadata,
          al.created_at,
          u.username,
@@ -146,7 +177,7 @@ router.get("/", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("Activity logs error:", err);
+    logSafeError("Activity logs error", err);
     res.status(500).json({
       success: false,
       message: "Failed to fetch activity logs.",
@@ -194,7 +225,7 @@ router.get("/meta", async (_req, res) => {
       },
     });
   } catch (err) {
-    console.error("Activity log metadata error:", err);
+    logSafeError("Activity log metadata error", err);
     res.status(500).json({
       success: false,
       message: "Failed to fetch activity log filters.",
@@ -212,7 +243,7 @@ router.get("/actions", async (_req, res) => {
     `);
     res.json({ success: true, data: result.rows.map((row) => row.action) });
   } catch (err) {
-    console.error("Activity log actions error:", err);
+    logSafeError("Activity log actions error", err);
     res.status(500).json({
       success: false,
       message: "Failed to fetch actions.",

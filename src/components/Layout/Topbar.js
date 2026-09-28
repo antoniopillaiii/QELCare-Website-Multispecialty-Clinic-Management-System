@@ -224,14 +224,27 @@ export default function Topbar({ sideOpen, onToggle, pageTitle, pageSubtitle }) 
   }, []);
 
   useEffect(() => {
-    const stored = localStorage.getItem("user");
-    if (stored) setUser(JSON.parse(stored));
+    // Re-read the signed-in user whenever Profile Settings saves a change
+    // (name or photo), so the top bar updates without a page reload.
+    const readStoredUser = () => {
+      try {
+        const stored = localStorage.getItem("user");
+        if (stored) setUser(JSON.parse(stored));
+      } catch {
+        // Ignore unreadable stored data; keep the current display.
+      }
+    };
+    readStoredUser();
     const handleClick = (event) => {
       if (dropRef.current && !dropRef.current.contains(event.target)) setDropOpen(false);
       if (notifRef.current && !notifRef.current.contains(event.target)) setNotifOpen(false);
     };
     document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
+    window.addEventListener("qelcare:user-updated", readStoredUser);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      window.removeEventListener("qelcare:user-updated", readStoredUser);
+    };
   }, []);
 
   useEffect(() => {

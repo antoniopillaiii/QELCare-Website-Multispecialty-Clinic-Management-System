@@ -4,6 +4,7 @@ const tokenManager = require("../../../shared/utils/tokenManager");
 const authService = require("../services/authService");
 const logger = require("../../../shared/utils/activityLogger");
 const passwordHistory = require("../../../shared/utils/passwordHistory");
+const { logSafeError } = require("../../../shared/utils/safeErrorLog");
 const {
   validateLoginInput,
   validateEmail,
@@ -210,7 +211,7 @@ const login = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Login error:", error);
+    logSafeError("Login error", error);
     res.status(500).json({ success: false, message: "Login failed" });
   }
 };
@@ -232,7 +233,7 @@ const logout = async (req, res) => {
 
     res.status(200).json({ success: true, message: "Logged out successfully" });
   } catch (error) {
-    console.error("Logout error:", error);
+    logSafeError("Logout error", error);
     res.status(500).json({ success: false, message: "Logout failed" });
   }
 };
@@ -250,7 +251,7 @@ const logoutAll = async (req, res) => {
     });
     res.status(200).json({ success: true, message: "Logged out from all devices" });
   } catch (error) {
-    console.error("Logout all error:", error);
+    logSafeError("Logout all error", error);
     res.status(500).json({ success: false, message: "Logout all failed" });
   }
 };
@@ -276,7 +277,7 @@ const sendOTP = async (req, res) => {
       message: result.message,
     });
   } catch (error) {
-    console.error("Send OTP error:", error);
+    logSafeError("Send OTP error", error);
     res.status(500).json({ success: false, message: "Failed to send OTP" });
   }
 };
@@ -301,7 +302,7 @@ const verifyOTP = async (req, res) => {
       attempts_left: result.attempts_left,
     });
   } catch (error) {
-    console.error("Verify OTP error:", error);
+    logSafeError("Verify OTP error", error);
     res.status(500).json({ success: false, message: "OTP verification failed" });
   }
 };
@@ -327,7 +328,7 @@ const resendOTP = async (req, res) => {
       message: result.message,
     });
   } catch (error) {
-    console.error("Resend OTP error:", error);
+    logSafeError("Resend OTP error", error);
     res.status(500).json({ success: false, message: "Failed to resend OTP" });
   }
 };
@@ -417,7 +418,7 @@ const resetPassword = async (req, res) => {
     try {
       await client.query("ROLLBACK");
     } catch (_) {}
-    console.error("Reset password error:", error);
+    logSafeError("Reset password error", error);
     res.status(500).json({ success: false, message: "Password reset failed" });
   } finally {
     client.release();
@@ -518,7 +519,7 @@ const changePassword = async (req, res) => {
     try {
       await client.query("ROLLBACK");
     } catch (_) {}
-    console.error("Change password error:", error);
+    logSafeError("Change password error", error);
     res.status(500).json({ success: false, message: "Password change failed" });
   } finally {
     client.release();

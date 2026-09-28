@@ -1,6 +1,58 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import MainLayout from "../../Layout/MainLayout";
+import Modal from "../../common/Modal";
 import { API_URL, authFetch, getUserRole, logout } from "../../../utils/auth";
+import { CLINIC_TZ } from "../../../utils/manilaDate";
+
+// Column widths enforced by the backend (users / user_addresses).
+const MAX_LENGTH = {
+  first_name: 50,
+  last_name: 50,
+  middle_name: 50,
+  suffix: 10,
+  email: 100,
+  phone: 20,
+  alternate_phone: 20,
+  region_code: 10,
+  province_code: 10,
+  municipality_code: 10,
+  barangay_code: 10,
+};
+
+// Patient fields that need an emailed verification code to change (same rule
+// as the mobile app; the backend enforces it).
+const PATIENT_SENSITIVE_FIELDS = [
+  "email",
+  "phone",
+  "alternate_phone",
+  "address_line",
+  "region_code",
+  "province_code",
+  "municipality_code",
+  "barangay_code",
+];
+
+// Error codes about the password or verification code entered in the second
+// step; these are shown in that dialog so the user can try again.
+const SECOND_STEP_ERRORS = [
+  "INCORRECT_CURRENT_PASSWORD",
+  "CURRENT_PASSWORD_REQUIRED",
+  "OTP_REQUIRED",
+  "NO_CODE",
+  "ALREADY_USED",
+  "EXPIRED",
+  "INVALID_CODE",
+  "TOO_MANY_ATTEMPTS",
+];
+
+// Value used to tell whether a field changed: case of the email and spacing of
+// a phone number don't count (the backend compares the same way).
+function comparable(field, value) {
+  const text = String(value || "").trim();
+  if (field === "email") return text.toLowerCase();
+  if (field === "phone" || field === "alternate_phone") return text.replace(/[\s\-()]/g, "");
+  return text;
+}
 
 const EMPTY_PROFILE = {
   first_name: "",
@@ -40,6 +92,7 @@ function formatDateTime(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Not recorded";
   return new Intl.DateTimeFormat("en-PH", {
+    timeZone: CLINIC_TZ,
     month: "short",
     day: "2-digit",
     year: "numeric",
@@ -157,6 +210,7 @@ function Field({ label, name, value, onChange, type = "text", placeholder = "", 
           onChange={onChange}
           placeholder={placeholder}
           disabled={disabled}
+          maxLength={MAX_LENGTH[name]}
           aria-invalid={error ? "true" : undefined}
         />
       </div>
@@ -183,7 +237,7 @@ function ReadOnly({ label, value, mono = false }) {
   );
 }
 
-function PasswordInput({ label, name, value, onChange }) {
+function PasswordInput({ label, name, value, onChange, autoComplete = "new-password", autoFocus = false }) {
   const [visible, setVisible] = useState(false);
   return (
     <label className="ps-field has-eye">
@@ -194,7 +248,9 @@ function PasswordInput({ label, name, value, onChange }) {
           name={name}
           value={value}
           onChange={onChange}
-          autoComplete="new-password"
+          autoComplete={autoComplete}
+          autoFocus={autoFocus}
+          maxLength={128}
         />
         <button type="button" className="ps-eye" onClick={() => setVisible((current) => !current)}>
           {visible ? "Hide" : "Show"}
@@ -276,6 +332,12 @@ export default function ProfileSettings() {
     confirmPassword: "",
   });
   const [passwordSaving, setPasswordSaving] = useState(false);
+  // Second step of a save: "password" (staff changing their email) or "otp"
+  // (patient changing contact/address details).
+  const [confirmStep, setConfirmStep] = useState(null);
+  const [confirmValue, setConfirmValue] = useState("");
+  const [confirmError, setConfirmError] = useState("");
+  const [otpSending, setOtpSending] = useState(false);
 
   const showAlert = useCallback((type, message) => {
     setAlert({ type, message });
@@ -318,7 +380,8 @@ export default function ProfileSettings() {
   const meterPct = passwordForm.newPassword ? Math.round((passedChecks / 5) * 100) : 0;
   const meterColor = passedChecks <= 2 ? "#e0574f" : passedChecks <= 4 ? "#e8a13a" : "#25a463";
   const statusValue = profile?.status || "unknown";
-  const statusOk = String(statusValue).toLowerCase() === "active";
+  const statusOk = String(statusValue).toLowerCase() === "verified";
+  const isPatient = (profile?.role || getUserRole()) === "Patient";
 
   function handleFormChange(event) {
     const { name, value } = event.target;
@@ -329,6 +392,80 @@ export default function ProfileSettings() {
   function handlePasswordChange(event) {
     const { name, value } = event.target;
     setPasswordForm((current) => ({ ...current, [name]: value }));
+  }
+
+  function closeConfirm() {
+    setConfirmStep(null);
+    setConfirmValue("");
+    setConfirmError("");
+  }
+
+  // Patients: send (or resend) the profile-change code to the account email.
+  async function sendProfileOtp() {
+    setOtpSending(true);
+    setConfirmError("");
+    try {
+      const res = await authFetch("/auth/patient/profile/otp", { method: "POST", body: "{}" });
+      if (!res) return false;
+      const data = await res.json();
+      if (!res.ok || data.success === false) throw new Error(data.message || "Couldn't send the verification code.");
+      return true;
+    } catch (error) {
+      setConfirmError(error.message || "Couldn't send the verification code.");
+      return false;
+    } finally {
+      setOtpSending(false);
+    }
+  }
+
+  // Sends the save. `extra` carries the second-step value (current_password or
+  // otp_code); errors about that value are shown in its dialog.
+  async function submitProfile(extra = {}) {
+    const payload = {
+      ...form,
+      first_name: form.first_name.trim(),
+      last_name: form.last_name.trim(),
+      email: form.email.trim().toLowerCase(),
+      ...extra,
+    };
+    // Patients save through the patient profile endpoint (the one the mobile
+    // app uses), which checks the verification code and updates the linked
+    // patient record too.
+    const endpoint = isPatient ? "/auth/patient/profile" : "/users/me";
+    if (isPatient) payload.username = profile?.username || "";
+
+    setSaving(true);
+    try {
+      const res = await authFetch(endpoint, { method: "PUT", body: JSON.stringify(payload) });
+      if (!res) return;
+      const data = await res.json();
+      if (!res.ok || data.success === false) {
+        if (confirmStep && SECOND_STEP_ERRORS.includes(data.code)) {
+          setConfirmError(
+            `${data.message || "Verification failed."}${data.attempts_left !== undefined ? ` (${data.attempts_left} attempt${data.attempts_left === 1 ? "" : "s"} left)` : ""}`
+          );
+          return;
+        }
+        throw new Error(data.message || "Failed to save profile.");
+      }
+
+      closeConfirm();
+      setEditing(false);
+      if (data.changed === false) {
+        setForm(mapProfileToForm(profile));
+        showAlert("success", data.message || "No changes to save.");
+        return;
+      }
+      // Reload the full profile (role, status, address codes) and update the
+      // signed-in user shown in the top bar.
+      await loadProfile();
+      showAlert("success", data.message || "Profile updated.");
+    } catch (error) {
+      closeConfirm();
+      showAlert("error", error.message || "Failed to save profile.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function saveProfile() {
@@ -351,30 +488,39 @@ export default function ProfileSettings() {
     }
     setFieldErrors({});
 
-    setSaving(true);
-    try {
-      const res = await authFetch("/users/me", {
-        method: "PUT",
-        body: JSON.stringify({ ...form,
-          email: form.email.trim().toLowerCase(),
-        }),
-      });
-      if (!res) return;
-      const data = await res.json();
-      if (!res.ok || data.success === false) {
-        throw new Error(data.message || "Failed to save profile.");
-      }
+    const changed = (field) => comparable(field, form[field]) !== comparable(field, profile?.[field]);
 
-      const updated = data.data;
-      setProfile(updated);
-      setForm(mapProfileToForm(updated));
-      syncStoredUser(updated);
-      setEditing(false);
-      showAlert("success", "Profile updated.");
-    } catch (error) {
-      showAlert("error", error.message || "Failed to save profile.");
-    } finally {
-      setSaving(false);
+    if (isPatient && PATIENT_SENSITIVE_FIELDS.some(changed)) {
+      setConfirmValue("");
+      setConfirmError("");
+      setConfirmStep("otp");
+      await sendProfileOtp();
+      return;
+    }
+    if (!isPatient && changed("email")) {
+      setConfirmValue("");
+      setConfirmError("");
+      setConfirmStep("password");
+      return;
+    }
+    await submitProfile();
+  }
+
+  function submitConfirm(event) {
+    event.preventDefault();
+    if (confirmStep === "otp") {
+      const code = confirmValue.trim();
+      if (!/^\d{6}$/.test(code)) {
+        setConfirmError("Enter the 6-digit code from your email.");
+        return;
+      }
+      submitProfile({ otp_code: code });
+    } else {
+      if (!confirmValue) {
+        setConfirmError("Enter your current password.");
+        return;
+      }
+      submitProfile({ current_password: confirmValue });
     }
   }
 
@@ -425,7 +571,9 @@ export default function ProfileSettings() {
     }
   }
 
-  async function changePassword() {
+  async function changePassword(event) {
+    event?.preventDefault();
+    if (passwordSaving) return;
     if (!passwordForm.currentPassword) {
       showAlert("error", "Current password is required.");
       return;
@@ -653,8 +801,8 @@ export default function ProfileSettings() {
                   </div>
                 </div>
               </div>
-              <div className="ps-pass-form">
-                <PasswordInput label="Current Password" name="currentPassword" value={passwordForm.currentPassword} onChange={handlePasswordChange} />
+              <form className="ps-pass-form" onSubmit={changePassword} noValidate>
+                <PasswordInput label="Current Password" name="currentPassword" value={passwordForm.currentPassword} onChange={handlePasswordChange} autoComplete="current-password" />
                 <PasswordInput label="New Password" name="newPassword" value={passwordForm.newPassword} onChange={handlePasswordChange} />
                 <div className="ps-meter" aria-hidden="true">
                   <i style={{ width: `${meterPct}%`, background: meterColor }} />
@@ -676,12 +824,72 @@ export default function ProfileSettings() {
                   ))}
                 </div>
                 <PasswordInput label="Confirm New Password" name="confirmPassword" value={passwordForm.confirmPassword} onChange={handlePasswordChange} />
-                <button type="button" className="ps-btn primary wide" onClick={changePassword} disabled={passwordSaving}>
+                <button type="submit" className="ps-btn primary wide" disabled={passwordSaving}>
                   {passwordSaving ? "Updating..." : "Update Password"}
                 </button>
-              </div>
+              </form>
             </section>
           </div>
+        )}
+
+        {confirmStep && (
+          <Modal
+            title={confirmStep === "otp" ? "Verify Your Email" : "Confirm Your Password"}
+            subtitle={
+              confirmStep === "otp"
+                ? `We sent a 6-digit code to ${profile?.email || "your email"}.`
+                : "Changing your email signs you out on your other devices."
+            }
+            onClose={saving ? undefined : closeConfirm}
+            closeOnOverlay={!saving}
+          >
+            <form className="ps-confirm" onSubmit={submitConfirm} noValidate>
+              {confirmStep === "otp" ? (
+                <label className="ps-field">
+                  <span className="lbl">Verification Code</span>
+                  <div className="ps-control">
+                    <input
+                      name="otp_code"
+                      value={confirmValue}
+                      onChange={(event) => setConfirmValue(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      maxLength={6}
+                      placeholder="000000"
+                      autoFocus
+                    />
+                  </div>
+                </label>
+              ) : (
+                <PasswordInput
+                  label="Current Password"
+                  name="current_password"
+                  value={confirmValue}
+                  onChange={(event) => setConfirmValue(event.target.value)}
+                  autoComplete="current-password"
+                  autoFocus
+                />
+              )}
+              {confirmError && (
+                <div className="ps-confirm-err" role="alert">
+                  {confirmError}
+                </div>
+              )}
+              <div className="ps-confirm-actions">
+                {confirmStep === "otp" && (
+                  <button type="button" className="ps-btn ghost" onClick={sendProfileOtp} disabled={otpSending || saving}>
+                    {otpSending ? "Sending..." : "Resend Code"}
+                  </button>
+                )}
+                <button type="button" className="ps-btn ghost" onClick={closeConfirm} disabled={saving}>
+                  Cancel
+                </button>
+                <button type="submit" className="ps-btn primary" disabled={saving}>
+                  {saving ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            </form>
+          </Modal>
         )}
       </div>
 
@@ -962,6 +1170,9 @@ export default function ProfileSettings() {
 .ps-stat-v.mono { font-variant-numeric: tabular-nums; }
 
 .ps-pass-form { padding: 22px 24px 24px; display: flex; flex-direction: column; gap: 16px; }
+.ps-confirm { display: flex; flex-direction: column; gap: 14px; }
+.ps-confirm-err { padding: 10px 12px; border-radius: 10px; background: #fef1f1; border: 1px solid #f6ced0; color: var(--danger); font-size: 13px; font-weight: 700; }
+.ps-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .ps-eye {
   position: absolute;
   right: 6px;
