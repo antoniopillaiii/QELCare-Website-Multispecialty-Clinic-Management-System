@@ -44,6 +44,12 @@ function csvCell(value) {
   return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }
 
+// For screens that build their own CSV layout: a quoted cell that can't run
+// as a spreadsheet formula.
+export function safeCsvCell(value) {
+  return csvCell(neutralizeFormula(value));
+}
+
 function cellText(column, row) {
   const raw = typeof column.value === "function" ? column.value(row) : row?.[column.key];
   if (raw === null || raw === undefined) return "";

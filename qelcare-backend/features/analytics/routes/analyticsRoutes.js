@@ -7,6 +7,7 @@ const { generateReport } = require("../services/geminiReportService");
 const Appointment = require("../../appointment/models/Appointment");
 const Queue = require("../../queue/models/Queue");
 const { MANILA_TODAY_SQL, manilaToday } = require("../../../shared/utils/manilaTime");
+const { logSafeError } = require("../../../shared/utils/safeErrorLog");
 
 router.use(authenticate, authorize(["Admin"]));
 
@@ -109,6 +110,7 @@ function normalizeDayRows(rows) {
 function buildFallbackReport({ range, metrics, topDepartment, busiestDay }) {
   const totalAppointments = intValue(metrics.total_appointments);
   const completedVisits = intValue(metrics.completed_visits);
+  const forBilling = intValue(metrics.for_billing_appointments);
   const queueEntries = intValue(metrics.queue_entries);
   const completionRate = pct(completedVisits, totalAppointments);
   const departmentName = topDepartment?.department || "No department data";
@@ -127,6 +129,7 @@ function buildFallbackReport({ range, metrics, topDepartment, busiestDay }) {
   const bullets = [
     `Total appointments: ${totalAppointments}.`,
     `Completed visits: ${completedVisits} (${completionRate}% completion rate).`,
+    `Awaiting payment (For Billing): ${forBilling} visit${forBilling === 1 ? "" : "s"}.`,
     `Queue activity: ${queueEntries} entr${queueEntries === 1 ? "y" : "ies"} recorded.`,
     `Most visited department: ${departmentName}${departmentCount ? ` with ${departmentCount} appointment${departmentCount === 1 ? "" : "s"}` : ""}.`,
     `Busiest clinic day: ${dayName}${dayCount ? ` with ${dayCount} ${busiestSource === "queue activity" ? "queue entries" : "appointments"}` : ""}.`,
@@ -144,7 +147,23 @@ function buildFallbackReport({ range, metrics, topDepartment, busiestDay }) {
   };
 }
 
-async function buildAiInsights(rangeKey) {
+// Status buckets for the period. Together they add up to total_appointments:
+// "Completed" is a paid visit (the Dashboard's definition); For Billing is a
+// finished consultation awaiting payment and is reported on its own.
+const STATUS_METRIC_KEYS = [
+  "completed_visits",
+  "for_billing_appointments",
+  "in_queue_appointments",
+  "confirmed_appointments",
+  "pending_appointments",
+  "rescheduled_appointments",
+  "cancelled_appointments",
+  "no_show_appointments",
+];
+
+// `generate: false` returns the SQL metrics only (no Gemini call, report null)
+// so a page can show the numbers on open without spending an AI request.
+async function buildAiInsights(rangeKey, { generate = true } = {}) {
   const range = resolveDateRange(rangeKey);
   const params = [range.startDate, range.endDate];
 
@@ -159,6 +178,7 @@ async function buildAiInsights(rangeKey) {
       SELECT
         COUNT(*)::int AS total_appointments,
         COUNT(*) FILTER (WHERE status = 'COMPLETED')::int AS completed_visits,
+        COUNT(*) FILTER (WHERE status = 'FOR_BILLING')::int AS for_billing_appointments,
         COUNT(*) FILTER (WHERE status = 'PENDING')::int AS pending_appointments,
         COUNT(*) FILTER (WHERE status = 'CONFIRMED')::int AS confirmed_appointments,
         COUNT(*) FILTER (WHERE status = 'IN_QUEUE')::int AS in_queue_appointments,
@@ -222,13 +242,7 @@ async function buildAiInsights(rangeKey) {
 
   const metrics = normalizeRows(metricsResult.rows, [
     "total_appointments",
-    "completed_visits",
-    "pending_appointments",
-    "confirmed_appointments",
-    "in_queue_appointments",
-    "cancelled_appointments",
-    "no_show_appointments",
-    "rescheduled_appointments",
+    ...STATUS_METRIC_KEYS,
     "queue_entries",
   ])[0] || {};
 
@@ -244,31 +258,27 @@ async function buildAiInsights(rangeKey) {
       ? { ...topAppointmentDay, source: "appointments" }
       : null;
 
-  const fallbackReport = buildFallbackReport({
-    range,
-    metrics,
-    topDepartment,
-    busiestDay,
-  });
-
-  let report;
-  let aiSource = "gemini";
+  let report = null;
+  let aiSource = null;
   let fallbackReason = null;
 
-  try {
-    report = await generateReport({
-      range,
-      metrics,
-      departmentRows,
-      appointmentDayRows,
-      queueDayRows,
-      topDepartment,
-      busiestDay,
-    });
-  } catch (err) {
-    report = fallbackReport;
-    aiSource = "fallback";
-    fallbackReason = err.message || "Gemini unavailable.";
+  if (generate) {
+    try {
+      report = await generateReport({
+        range,
+        metrics,
+        departmentRows,
+        appointmentDayRows,
+        queueDayRows,
+        topDepartment,
+        busiestDay,
+      });
+      aiSource = "gemini";
+    } catch (err) {
+      report = buildFallbackReport({ range, metrics, topDepartment, busiestDay });
+      aiSource = "fallback";
+      fallbackReason = err.message || "Gemini unavailable.";
+    }
   }
 
   return {
@@ -276,6 +286,7 @@ async function buildAiInsights(rangeKey) {
     source: aiSource,
     fallback_reason: fallbackReason,
     metrics,
+    status_breakdown: STATUS_METRIC_KEYS.map((key) => ({ key, count: intValue(metrics[key]) })),
     highlights: {
       most_visited_department: topDepartment || null,
       busiest_day: busiestDay || null,
@@ -289,13 +300,26 @@ async function buildAiInsights(rangeKey) {
   };
 }
 
+// Explicit "Generate": may call Gemini, so it's rate limited.
 router.get("/ai-insights", aiInsightsLimiter, async (req, res) => {
   try {
     const result = await buildAiInsights(req.query.range);
     res.json({ success: true, data: result });
   } catch (err) {
-    console.error("AI insights error:", err);
+    logSafeError("AI insights error", err);
     res.status(500).json({ success: false, message: "Failed to generate AI insights." });
+  }
+});
+
+// Same SQL metrics without any AI call: for showing the numbers when a report
+// page opens or its range changes. Never touches Gemini or its rate limit.
+router.get("/insights-metrics", async (req, res) => {
+  try {
+    const result = await buildAiInsights(req.query.range, { generate: false });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    logSafeError("Insights metrics error", err);
+    res.status(500).json({ success: false, message: "Failed to load analytics." });
   }
 });
 
@@ -385,19 +409,27 @@ router.get("/dashboard", async (req, res) => {
 
 router.get("/summary", async (req, res) => {
   try {
+    // "New this month" = created in the clinic's current calendar month
+    // (Asia/Manila), the same "this month" as the Billing and Medical Records
+    // cards. users.created_at is timestamptz; patients.created_at is a
+    // timestamp the app writes in Manila local time (the pool's session zone).
     const [users, patients, appointments, billing] = await Promise.all([
       pool.query(`
         SELECT
           COUNT(*) AS total_users,
           COUNT(*) FILTER (WHERE status = 'verified') AS active_users,
           COUNT(*) FILTER (WHERE status = 'deactivated') AS deactivated_users,
-          COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days') AS new_this_month
+          COUNT(*) FILTER (
+            WHERE (created_at AT TIME ZONE 'Asia/Manila') >= DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Manila')
+          ) AS new_this_month
         FROM users`),
       pool.query(`
         SELECT
           COUNT(*) AS total_patients,
           COUNT(*) FILTER (WHERE is_active = true) AS active_patients,
-          COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days') AS new_this_month
+          COUNT(*) FILTER (
+            WHERE created_at >= DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Manila')
+          ) AS new_this_month
         FROM patients`),
       pool.query(`
         SELECT

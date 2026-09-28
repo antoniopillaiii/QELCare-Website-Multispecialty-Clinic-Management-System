@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MainLayout from "../../Layout/MainLayout";
-import Pagination, { usePagination } from "../../common/Pagination";
+import Pagination from "../../common/Pagination";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
+import { buildQuery, fetchAllPages } from "../../../utils/paginatedFetch";
 import { C } from "../../../utils/adminTheme";
 import { manilaToday } from "../../../utils/manilaDate";
 import { X } from "lucide-react";
@@ -389,8 +390,16 @@ function RecordFormModal({ record, patients, doctors, appointments, saving, onCl
 const thStyle = { textAlign: "left", padding: "12px 14px", color: C.muted, fontSize: 11, fontWeight: 900, textTransform: "uppercase", letterSpacing: ".05em", whiteSpace: "nowrap" };
 const tdStyle = { padding: "13px 14px", color: C.text, fontSize: 13, verticalAlign: "middle" };
 
+const PAGE_SIZE = 10;
+
 export default function AdminRecords() {
+  // One page of records from the server; search, filters, paging, the stat
+  // cards and exports all run against the whole medical_records table.
   const [records, setRecords] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [pages, setPages] = useState(1);
+  const [page, setPage] = useState(1);
+  const [summary, setSummary] = useState(null);
   const [patients, setPatients] = useState([]);
   const [doctors, setDoctors] = useState([]);
   const [appointments, setAppointments] = useState([]);
@@ -398,6 +407,7 @@ export default function AdminRecords() {
   const [saving, setSaving] = useState(false);
   const [alert, setAlert] = useState(null);
   const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
   const [patientFilter, setPatientFilter] = useState("all");
   const [doctorFilter, setDoctorFilter] = useState("all");
   const [modal, setModal] = useState(null);
@@ -406,6 +416,23 @@ export default function AdminRecords() {
     setAlert({ type, message });
     window.setTimeout(() => setAlert(null), 4200);
   }, []);
+
+  // Search as you type, without a request per keystroke.
+  useEffect(() => {
+    const id = window.setTimeout(() => setQuery(search.trim()), 300);
+    return () => window.clearTimeout(id);
+  }, [search]);
+
+  // Any filter change goes back to page 1.
+  useEffect(() => {
+    setPage(1);
+  }, [query, patientFilter, doctorFilter]);
+
+  const filters = useMemo(() => ({
+    search: query,
+    patient_id: patientFilter,
+    doctor_id: doctorFilter,
+  }), [doctorFilter, patientFilter, query]);
 
   const loadLookups = useCallback(async () => {
     const [patientsPayload, usersPayload, apptPayload] = await Promise.all([
@@ -418,27 +445,47 @@ export default function AdminRecords() {
     const userList = Array.isArray(usersPayload.data) ? usersPayload.data : [];
     const appointmentList = Array.isArray(apptPayload.data) ? apptPayload.data : apptPayload.appointments || [];
 
-    setPatients(patientList.filter((patient) => patient.is_active !== false));
+    // Deactivated patients stay in the filter: their records still exist.
+    setPatients(patientList);
     setDoctors(userList.filter((user) => user.role === "Doctor" && user.status !== "deactivated"));
     setAppointments(appointmentList);
   }, []);
 
-  const loadRecords = useCallback(async () => {
-    setLoading(true);
+  const loadSummary = useCallback(async () => {
     try {
-      const payload = await parseApi(await authFetch("/medical-records?limit=100"));
-      setRecords(Array.isArray(payload.data) ? payload.data : payload.records || []);
+      const payload = await parseApi(await authFetch("/medical-records/summary"));
+      setSummary(payload.data || null);
     } catch (err) {
-      console.error("Medical records load error:", err);
-      showAlert("err", err.message || "Failed to load medical records");
-    } finally {
-      setLoading(false);
+      showAlert("err", err.message || "Failed to load record totals");
     }
   }, [showAlert]);
 
+  // Only the latest request may update the table (typing / paging quickly
+  // must not let an older, slower response overwrite a newer one).
+  const requestRef = useRef(0);
+  const loadRecords = useCallback(async () => {
+    const requestId = ++requestRef.current;
+    setLoading(true);
+    try {
+      const payload = await parseApi(await authFetch(`/medical-records${buildQuery({ ...filters, page, limit: PAGE_SIZE })}`));
+      if (requestId !== requestRef.current) return;
+      setRecords(Array.isArray(payload.data) ? payload.data : payload.records || []);
+      setTotal(Number(payload.total) || 0);
+      setPages(Number(payload.pages) || 1);
+    } catch (err) {
+      if (requestId === requestRef.current) showAlert("err", err.message || "Failed to load medical records");
+    } finally {
+      if (requestId === requestRef.current) setLoading(false);
+    }
+  }, [filters, page, showAlert]);
+
+  const refresh = useCallback(() => {
+    loadRecords();
+    loadSummary();
+  }, [loadRecords, loadSummary]);
+
   useEffect(() => {
     loadLookups().catch((err) => {
-      console.error("Medical records lookup error:", err);
       showAlert("err", err.message || "Failed to load record lookups");
     });
   }, [loadLookups, showAlert]);
@@ -447,38 +494,25 @@ export default function AdminRecords() {
     loadRecords();
   }, [loadRecords]);
 
-  const stats = useMemo(() => {
-    const uniquePatients = new Set(records.map((record) => record.patient_id)).size;
-    const withVitals = records.filter((record) => record.vital_id).length;
-    const followUps = records.filter((record) => record.follow_up_date || record.follow_up_date_text).length;
-    const confidential = records.filter((record) => record.is_confidential).length;
-    return { total: records.length, uniquePatients, withVitals, followUps, confidential };
-  }, [records]);
+  useEffect(() => {
+    loadSummary();
+  }, [loadSummary]);
 
-  const visibleRecords = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return records.filter((record) => {
-      const patientMatches = patientFilter === "all" || String(record.patient_id) === String(patientFilter);
-      const doctorMatches = doctorFilter === "all" || String(record.doctor_id) === String(doctorFilter);
-      const searchMatches = !query || [
-        record.record_id,
-        record.patient_name,
-        record.doctor_name,
-        record.diagnosis,
-        record.chief_complaint,
-        record.treatment_plan,
-        record.doctor_notes,
-      ].some((value) => String(value || "").toLowerCase().includes(query));
-      return patientMatches && doctorMatches && searchMatches;
-    });
-  }, [doctorFilter, patientFilter, records, search]);
-
-  // Paginate the filtered rows; changing any filter returns to page 1.
-  const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(
-    visibleRecords,
-    10,
-    `${search}|${doctorFilter}|${patientFilter}`
+  // Every record matching the current filters, for the export.
+  const loadAllRows = useCallback(
+    () => fetchAllPages("/medical-records", filters, { idKey: "record_id" }),
+    [filters]
   );
+
+  const stats = {
+    total: summary?.total ?? 0,
+    uniquePatients: summary?.unique_patients ?? 0,
+    withVitals: summary?.linked_vitals ?? 0,
+    followUps: summary?.follow_ups ?? 0,
+    confidential: summary?.confidential ?? 0,
+  };
+  const statsLoading = !summary;
+  const isFiltered = Boolean(query) || patientFilter !== "all" || doctorFilter !== "all";
 
   const saveRecord = async (payload) => {
     setSaving(true);
@@ -491,14 +525,7 @@ export default function AdminRecords() {
           body: JSON.stringify(payload),
         }
       ));
-      const saved = response.data || response.record;
-      setRecords((prev) => {
-        const index = prev.findIndex((item) => String(recordId(item)) === String(recordId(saved)));
-        if (index < 0) return [saved, ...prev];
-        const next = [...prev];
-        next[index] = saved;
-        return next;
-      });
+      if (response.data || response.record) refresh();
       setModal(null);
       showAlert("ok", isEdit ? "Medical record updated successfully" : "Medical record created successfully");
     } catch (err) {
@@ -538,22 +565,24 @@ export default function AdminRecords() {
           <ExportMenu
             filename="qelcare-medical-records"
             title="QELCare Medical Records"
-            subtitle={`${visibleRecords.length} record${visibleRecords.length === 1 ? "" : "s"} matching the current filters`}
+            subtitle={`${total} record${total === 1 ? "" : "s"} ${isFiltered ? "matching the current filters" : "in total"}`}
             sheetTitle="Medical Records"
             columns={EXPORT_COLUMNS}
-            rows={visibleRecords}
+            rows={records}
+            rowCount={total}
+            loadRows={loadAllRows}
             disabled={loading}
           />
-          <Button onClick={loadRecords} disabled={loading}>Refresh</Button>
+          <Button onClick={refresh} disabled={loading}>Refresh</Button>
         </div>
       </div>
 
       <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 14, marginBottom: 18 }}>
-        <StatCard label="Total Records" value={loading ? "-" : stats.total} sub="Doctor-authored records" color={C.blue} />
-        <StatCard label="Unique Patients" value={loading ? "-" : stats.uniquePatients} sub="With records" color={C.purple} />
-        <StatCard label="Linked Vitals" value={loading ? "-" : stats.withVitals} sub="With nurse vitals" color={C.teal} />
-        <StatCard label="Follow-ups" value={loading ? "-" : stats.followUps} sub="With follow-up plans" color={C.amber} />
-        <StatCard label="Confidential" value={loading ? "-" : stats.confidential} sub="Restricted records" color={C.red} />
+        <StatCard label="Total Records" value={statsLoading ? "-" : stats.total} sub="Doctor-authored records" color={C.blue} />
+        <StatCard label="Unique Patients" value={statsLoading ? "-" : stats.uniquePatients} sub="With records" color={C.purple} />
+        <StatCard label="Linked Vitals" value={statsLoading ? "-" : stats.withVitals} sub="With nurse vitals" color={C.teal} />
+        <StatCard label="Follow-ups" value={statsLoading ? "-" : stats.followUps} sub="With follow-up plans" color={C.amber} />
+        <StatCard label="Confidential" value={statsLoading ? "-" : stats.confidential} sub="Restricted records" color={C.red} />
       </section>
 
       <section style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 16, boxShadow: "0 2px 10px rgba(15,23,42,.05)", overflow: "hidden" }}>
@@ -562,7 +591,11 @@ export default function AdminRecords() {
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search record, patient, diagnosis..." style={inputStyle} />
             <select value={patientFilter} onChange={(event) => setPatientFilter(event.target.value)} style={inputStyle}>
               <option value="all">All Patients</option>
-              {patients.map((patient) => <option key={patient.id} value={patient.id}>{patientName(patient)}</option>)}
+              {patients.map((patient) => (
+                <option key={patient.id} value={patient.id}>
+                  {patientName(patient)}{patient.is_active === false ? " (deactivated)" : ""}
+                </option>
+              ))}
             </select>
             <select value={doctorFilter} onChange={(event) => setDoctorFilter(event.target.value)} style={inputStyle}>
               <option value="all">All Doctors</option>
@@ -571,7 +604,9 @@ export default function AdminRecords() {
             <Button onClick={() => { setSearch(""); setPatientFilter("all"); setDoctorFilter("all"); }}>Clear</Button>
           </div>
           <div style={{ color: C.text, fontSize: 12, fontWeight: 800 }}>
-            {visibleRecords.length} of {records.length} loaded medical record{records.length === 1 ? "" : "s"} match your filters
+            {isFiltered
+              ? `${total} of ${stats.total} medical record${stats.total === 1 ? "" : "s"} match your filters`
+              : `${total} medical record${total === 1 ? "" : "s"}`}
           </div>
         </div>
 
@@ -592,7 +627,7 @@ export default function AdminRecords() {
             <tbody>
               {loading ? (
                 <tr><td colSpan={8} style={{ padding: 36, textAlign: "center", color: C.text, fontWeight: 800 }}>Loading medical records...</td></tr>
-              ) : visibleRecords.length === 0 ? (
+              ) : records.length === 0 ? (
                 <tr>
                   <td colSpan={8} style={{ padding: 42, textAlign: "center" }}>
                     <div style={{ color: C.navy, fontSize: 16, fontWeight: 900 }}>No medical records found</div>
@@ -600,7 +635,7 @@ export default function AdminRecords() {
                   </td>
                 </tr>
               ) : (
-                pageItems.map((record) => {
+                records.map((record) => {
                   const followUp = record.follow_up_date_text || record.follow_up_date;
                   return (
                     <tr key={recordId(record)} style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -643,9 +678,9 @@ export default function AdminRecords() {
         {!loading && (
           <Pagination
             page={page}
-            totalPages={totalPages}
-            totalItems={totalItems}
-            pageSize={pageSize}
+            totalPages={pages}
+            totalItems={total}
+            pageSize={PAGE_SIZE}
             onPageChange={setPage}
             label="records"
           />

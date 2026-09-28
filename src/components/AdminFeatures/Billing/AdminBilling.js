@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MainLayout from "../../Layout/MainLayout";
-import Pagination, { usePagination } from "../../common/Pagination";
-import { authFetch } from "../../../utils/auth";
+import Pagination from "../../common/Pagination";
 import { ExportMenu } from "../../../utils/exportUtils";
-import { CLINIC_TZ, manilaDateOf, manilaToday } from "../../../utils/manilaDate";
+import { CLINIC_TZ } from "../../../utils/manilaDate";
+import { buildQuery, fetchAllPages, fetchJson } from "../../../utils/paginatedFetch";
 
 const pesoFormatter = new Intl.NumberFormat("en-PH", {
   style: "currency",
@@ -81,15 +81,34 @@ function formatPaidAt(value) {
   return date ? dateFormatter.format(date) : "Not recorded";
 }
 
-// "Today" / "this month" are the clinic's (Asia/Manila), not the device's.
-// `target` is a "YYYY-MM-DD" Manila date.
-function sameDay(date, target) {
-  return Boolean(date) && manilaDateOf(date) === target;
+// Payment methods the billing API accepts. The source filter sends the
+// methods behind a source, so the grouping above stays the single mapping.
+const BILLING_METHODS = ["cash", "gcash", "maya", "card", "bank_transfer", "philhealth", "hmo", "other"];
+
+function methodsForSource(source) {
+  if (!source || source === "all") return [];
+  return BILLING_METHODS.filter((method) => getPaymentSource(method).toLowerCase() === source);
 }
 
-function sameMonth(date, target) {
-  return Boolean(date) && manilaDateOf(date).slice(0, 7) === target.slice(0, 7);
+function normalizeTransaction(transaction) {
+  const paidAt = transaction.paid_at || transaction.created_at;
+  return {
+    ...transaction,
+    reference:
+      transaction.or_number ||
+      transaction.receipt_number ||
+      transaction.payment_reference ||
+      `BILL-${transaction.billing_id || transaction.id || "N/A"}`,
+    amount: toNumber(transaction.total_amount || transaction.amount_paid || transaction.amount),
+    paidAt,
+    paidDate: toDateValue(paidAt),
+    status: normalizeText(transaction.status || "paid"),
+    paymentMethod: transaction.payment_method || transaction.method,
+    paymentSource: getPaymentSource(transaction.payment_method || transaction.method),
+  };
 }
+
+const PAGE_SIZE = 10;
 
 const EXPORT_COLUMNS = [
   { header: "OR / Reference", value: (txn) => txn.reference || "" },
@@ -101,10 +120,17 @@ const EXPORT_COLUMNS = [
 ];
 
 function AdminBilling() {
+  // One page of bills from the server. Search, source / status / Manila-date
+  // filters, paging and exports all run against the whole billing table; the
+  // summary cards are the server's totals over every bill.
   const [transactions, setTransactions] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [pages, setPages] = useState(1);
+  const [page, setPage] = useState(1);
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [filters, setFilters] = useState({
     search: "",
     method: "all",
@@ -113,122 +139,91 @@ function AdminBilling() {
     to: "",
   });
 
-  const fetchBilling = async () => {
-    try {
-      setLoading(true);
-      setError("");
-
-      const [dashboardResponse, billingResponse] = await Promise.all([
-        authFetch("/billing/dashboard"),
-        authFetch("/billing?limit=200"),
-      ]);
-
-      if (!dashboardResponse.ok) {
-        throw new Error("Unable to load billing summary.");
-      }
-
-      if (!billingResponse.ok) {
-        throw new Error("Unable to load billing transactions.");
-      }
-
-      const dashboardData = await dashboardResponse.json();
-      const billingData = await billingResponse.json();
-
-      setDashboard(dashboardData?.data || dashboardData || null);
-      setTransactions(Array.isArray(billingData?.data) ? billingData.data : []);
-    } catch (err) {
-      setError(err.message || "Unable to load billing records.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Search as you type, without a request per keystroke.
   useEffect(() => {
-    fetchBilling();
+    const id = window.setTimeout(() => setSearchQuery(filters.search.trim()), 300);
+    return () => window.clearTimeout(id);
+  }, [filters.search]);
+
+  const query = useMemo(() => ({
+    search: searchQuery,
+    status: filters.status,
+    payment_method: methodsForSource(filters.method),
+    // Clinic (Asia/Manila) calendar days, whole day inclusive, filtered on the
+    // server - the device's own time zone plays no part.
+    date_from: filters.from,
+    date_to: filters.to,
+  }), [filters.from, filters.method, filters.status, filters.to, searchQuery]);
+
+  // Any filter change goes back to page 1.
+  useEffect(() => {
+    setPage(1);
+  }, [query]);
+
+  const fetchDashboard = useCallback(async () => {
+    try {
+      const payload = await fetchJson("/billing/dashboard");
+      setDashboard(payload?.data || null);
+    } catch (err) {
+      setError(err.message || "Unable to load billing summary.");
+    }
   }, []);
 
-  const normalizedTransactions = useMemo(() => {
-    return transactions
-      .map((transaction) => {
-        const paidAt = transaction.paid_at || transaction.created_at;
-        const date = toDateValue(paidAt);
-        return {
-          ...transaction,
-          reference:
-            transaction.or_number ||
-            transaction.receipt_number ||
-            transaction.payment_reference ||
-            `BILL-${transaction.billing_id || transaction.id || "N/A"}`,
-          amount: toNumber(transaction.total_amount || transaction.amount_paid || transaction.amount),
-          paidAt,
-          paidDate: date,
-          status: normalizeText(transaction.status || "paid"),
-          paymentMethod: transaction.payment_method || transaction.method,
-          paymentSource: getPaymentSource(transaction.payment_method || transaction.method),
-        };
-      })
-      .sort((a, b) => {
-        const left = a.paidDate ? a.paidDate.getTime() : 0;
-        const right = b.paidDate ? b.paidDate.getTime() : 0;
-        return right - left;
-      });
-  }, [transactions]);
+  // Only the latest request may update the table.
+  const requestRef = useRef(0);
+  const fetchTransactions = useCallback(async () => {
+    const requestId = ++requestRef.current;
+    setLoading(true);
+    try {
+      const payload = await fetchJson(`/billing${buildQuery({ ...query, page, limit: PAGE_SIZE })}`);
+      if (requestId !== requestRef.current) return;
+      setTransactions(Array.isArray(payload?.data) ? payload.data : []);
+      setTotal(Number(payload.total) || 0);
+      setPages(Number(payload.pages) || 1);
+      setError("");
+    } catch (err) {
+      if (requestId === requestRef.current) setError(err.message || "Unable to load billing transactions.");
+    } finally {
+      if (requestId === requestRef.current) setLoading(false);
+    }
+  }, [page, query]);
 
-  const visibleTransactions = useMemo(() => {
-    const search = normalizeText(filters.search);
-    const fromDate = filters.from ? new Date(`${filters.from}T00:00:00`) : null;
-    const toDate = filters.to ? new Date(`${filters.to}T23:59:59`) : null;
+  const fetchBilling = useCallback(() => {
+    fetchDashboard();
+    fetchTransactions();
+  }, [fetchDashboard, fetchTransactions]);
 
-    return normalizedTransactions.filter((transaction) => {
-      const matchesSearch =
-        !search ||
-        normalizeText(transaction.reference).includes(search) ||
-        normalizeText(transaction.billing_id).includes(search) ||
-        normalizeText(transaction.payment_reference).includes(search);
+  useEffect(() => {
+    fetchDashboard();
+  }, [fetchDashboard]);
 
-      const matchesMethod =
-        filters.method === "all" || transaction.paymentSource.toLowerCase() === filters.method;
+  useEffect(() => {
+    fetchTransactions();
+  }, [fetchTransactions]);
 
-      const matchesStatus = filters.status === "all" || transaction.status === filters.status;
+  const pageItems = useMemo(() => transactions.map(normalizeTransaction), [transactions]);
 
-      const matchesFrom = !fromDate || (transaction.paidDate && transaction.paidDate >= fromDate);
-      const matchesTo = !toDate || (transaction.paidDate && transaction.paidDate <= toDate);
-
-      return matchesSearch && matchesMethod && matchesStatus && matchesFrom && matchesTo;
-    });
-  }, [filters, normalizedTransactions]);
-
-  // Paginate the filtered rows; changing any filter returns to page 1.
-  const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(
-    visibleTransactions,
-    10,
-    JSON.stringify(filters)
+  // Every bill matching the current filters, for the export.
+  const loadAllRows = useCallback(
+    async () => (await fetchAllPages("/billing", query)).map(normalizeTransaction),
+    [query]
   );
 
   const summary = useMemo(() => {
-    const today = manilaToday();
-    const stats = dashboard?.stats || dashboard || {};
-    const paidTransactions = normalizedTransactions.filter((transaction) => transaction.status === "paid");
-
-    const totalPaid = paidTransactions.reduce((sum, transaction) => sum + transaction.amount, 0);
-    const todayPaid = paidTransactions
-      .filter((transaction) => sameDay(transaction.paidDate, today))
-      .reduce((sum, transaction) => sum + transaction.amount, 0);
-    const monthPaid = paidTransactions
-      .filter((transaction) => sameMonth(transaction.paidDate, today))
-      .reduce((sum, transaction) => sum + transaction.amount, 0);
-    const hmoPaid = paidTransactions
-      .filter((transaction) => transaction.paymentSource === "HMO")
-      .reduce((sum, transaction) => sum + transaction.amount, 0);
+    const stats = dashboard?.stats || {};
+    // HMO Paid over ALL paid bills, grouped with the same source mapping the
+    // table uses.
+    const hmoPaid = (stats.by_method || [])
+      .filter((row) => getPaymentSource(row.payment_method) === "HMO")
+      .reduce((sum, row) => sum + toNumber(row.total), 0);
 
     return {
-      totalPaid: stats.total_paid ?? stats.total_revenue ?? totalPaid,
-      todayPaid: stats.today_paid ?? stats.today_revenue ?? todayPaid,
-      monthPaid: stats.month_paid ?? stats.month_revenue ?? stats.monthly_revenue ?? monthPaid,
+      totalPaid: stats.total_revenue,
+      todayPaid: stats.today_revenue,
+      monthPaid: stats.month_revenue,
       hmoPaid,
-      transactionCount: paidTransactions.length,
     };
-  }, [dashboard, normalizedTransactions]);
+  }, [dashboard]);
 
   const updateFilter = (key, value) => {
     setFilters((current) => ({
@@ -259,10 +254,12 @@ function AdminBilling() {
             <ExportMenu
               filename="qelcare-billing"
               title="QELCare Billing Transactions"
-              subtitle={`${visibleTransactions.length} transaction${visibleTransactions.length === 1 ? "" : "s"} matching the current filters`}
+              subtitle={`${total} transaction${total === 1 ? "" : "s"} matching the current filters`}
               sheetTitle="Billing"
               columns={EXPORT_COLUMNS}
-              rows={visibleTransactions}
+              rows={pageItems}
+              rowCount={total}
+              loadRows={loadAllRows}
               disabled={loading}
             />
             <button type="button" className="refresh-button" onClick={fetchBilling} disabled={loading}>
@@ -297,7 +294,7 @@ function AdminBilling() {
             type="search"
             value={filters.search}
             onChange={(event) => updateFilter("search", event.target.value)}
-            placeholder="Search OR or reference"
+            placeholder="Search OR number or patient"
           />
           <select value={filters.method} onChange={(event) => updateFilter("method", event.target.value)}>
             <option value="all">All sources</option>
@@ -310,7 +307,6 @@ function AdminBilling() {
             <option value="paid">Paid only</option>
             <option value="all">All statuses</option>
             <option value="voided">Voided</option>
-            <option value="pending">Pending</option>
           </select>
           <input type="date" value={filters.from} onChange={(event) => updateFilter("from", event.target.value)} />
           <input type="date" value={filters.to} onChange={(event) => updateFilter("to", event.target.value)} />
@@ -323,7 +319,7 @@ function AdminBilling() {
           <div className="table-heading">
             <div>
               <h3>Transactions</h3>
-              <p>{visibleTransactions.length} record{visibleTransactions.length === 1 ? "" : "s"}</p>
+              <p>{total} record{total === 1 ? "" : "s"}</p>
             </div>
           </div>
 
@@ -346,7 +342,7 @@ function AdminBilling() {
                       Loading transactions...
                     </td>
                   </tr>
-                ) : visibleTransactions.length === 0 ? (
+                ) : pageItems.length === 0 ? (
                   <tr>
                     <td colSpan="6" className="empty-cell">
                       No billing transactions found.
@@ -381,9 +377,9 @@ function AdminBilling() {
           {!loading && (
             <Pagination
               page={page}
-              totalPages={totalPages}
-              totalItems={totalItems}
-              pageSize={pageSize}
+              totalPages={pages}
+              totalItems={total}
+              pageSize={PAGE_SIZE}
               onPageChange={setPage}
               label="transactions"
             />

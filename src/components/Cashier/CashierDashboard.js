@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { authFetch } from "../../utils/auth";
 import MainLayout from "../Layout/MainLayout";
 import { todayISO } from "../Workflow/ClinicUi";
+import { buildQuery, fetchAllPages, fetchJson } from "../../utils/paginatedFetch";
 
 function formatTime(str) {
   if (!str) return "-";
@@ -79,66 +79,53 @@ function StatCard({ label, value, sub, accent, icon, onClick }) {
 
 export default function CashierDashboard() {
   const navigate = useNavigate();
-  const [appointments, setAppointments] = useState([]);
-  const [bills, setBills] = useState([]);
+  const [forBilling, setForBilling] = useState([]);
+  const [todayCount, setTodayCount] = useState(0);
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  const today = todayISO();
+
+  // Counts come from the server over all appointments. "Pending payment" is a
+  // FOR_BILLING visit (consultation done, not paid); paying flips it to
+  // COMPLETED. (Previously this read the first 100 appointments / bills and
+  // counted COMPLETED visits whose bill wasn't in those 100 as unpaid.)
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [apptRes, billingRes, dashboardRes] = await Promise.all([
-        authFetch("/appointments?limit=100"),
-        authFetch("/billing?limit=100"),
-        authFetch("/billing/dashboard"),
+      const [unpaid, todayList, dashboardData] = await Promise.all([
+        fetchAllPages("/appointments", { status: "FOR_BILLING" }),
+        fetchJson(`/appointments${buildQuery({ date: today, limit: 1 })}`),
+        fetchJson("/billing/dashboard"),
       ]);
 
-      const apptData = await apptRes.json();
-      const billingData = await billingRes.json();
-      const dashboardData = await dashboardRes.json();
-
-      if (!apptRes.ok) throw new Error(apptData.error || apptData.message || "Failed to load appointments.");
-      if (!billingRes.ok) throw new Error(billingData.error || billingData.message || "Failed to load billing.");
-      if (!dashboardRes.ok) throw new Error(dashboardData.error || dashboardData.message || "Failed to load cashier dashboard.");
-
-      setAppointments(apptData.appointments || []);
-      setBills(billingData.data || []);
+      setForBilling(unpaid);
+      setTodayCount(Number(todayList.total) || 0);
       setDashboard(dashboardData.data || null);
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [today]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  const today = todayISO();
-
-  const paidAppointmentIds = useMemo(() => {
-    return new Set(bills.filter((bill) => bill.status === "PAID").map((bill) => Number(bill.appointment_id)));
-  }, [bills]);
-
   const readyForPayment = useMemo(() => {
-    return appointments
-      .filter((item) => item.status === "COMPLETED")
-      .filter((item) => !paidAppointmentIds.has(Number(item.id)))
+    return forBilling
+      .filter((item) => item.status === "FOR_BILLING")
       .sort((a, b) => `${a.date || ""} ${a.time || ""}`.localeCompare(`${b.date || ""} ${b.time || ""}`));
-  }, [appointments, paidAppointmentIds]);
+  }, [forBilling]);
 
   const todayReadyForPayment = useMemo(() => {
     return readyForPayment.filter((item) => String(item.date || "").slice(0, 10) === today);
   }, [readyForPayment, today]);
 
-  const todayAppointments = useMemo(() => {
-    return appointments.filter((item) => String(item.date || "").slice(0, 10) === today);
-  }, [appointments, today]);
-
-  const recentPaid = dashboard?.recent || bills.filter((bill) => bill.status === "PAID").slice(0, 6);
+  const recentPaid = dashboard?.recent || [];
 
   const now = new Date().toLocaleString("en-PH", {
     weekday: "long",
@@ -153,7 +140,7 @@ export default function CashierDashboard() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 16, marginBottom: 24 }}>
         <StatCard
           label="Today's Appointments"
-          value={loading ? "..." : todayAppointments.length}
+          value={loading ? "..." : todayCount}
           sub="Scheduled today"
           accent="#163a6b"
           icon={<IconCalendar color="#163a6b" />}
@@ -161,7 +148,7 @@ export default function CashierDashboard() {
         <StatCard
           label="Pending Payment"
           value={loading ? "..." : readyForPayment.length}
-          sub="Completed, unpaid visits"
+          sub="Consultation done, unpaid"
           accent="#a56a00"
           icon={<IconClock color="#a56a00" />}
           onClick={() => navigate("/cashier/billing")}

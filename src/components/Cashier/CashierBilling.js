@@ -11,10 +11,10 @@ import {
   StatusBadge,
   formatDate,
   formatTime,
-  getRows,
   inputStyle,
   money,
 } from "../Workflow/ClinicUi";
+import { fetchAllPages } from "../../utils/paginatedFetch";
 
 const DEFAULT_FEE = 800;
 
@@ -24,7 +24,6 @@ function getRequestedServices(item) {
 
 export default function CashierBilling() {
   const [appointments, setAppointments] = useState([]);
-  const [bills, setBills] = useState([]);
   const [selected, setSelected] = useState(null);
   const [fee, setFee] = useState(DEFAULT_FEE);
   const [method, setMethod] = useState("cash");
@@ -38,20 +37,15 @@ export default function CashierBilling() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
+  // Every visit awaiting payment, however many there are. FOR_BILLING already
+  // means "consultation done, not paid": paying flips it to COMPLETED in the
+  // same transaction, and a void puts it back. (Previously this read the first
+  // 100 appointments and the first 100 bills, so older visits could vanish.)
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [appointmentsRes, billingRes] = await Promise.all([
-        authFetch("/appointments?limit=100"),
-        authFetch("/billing?limit=100"),
-      ]);
-      const appointmentsPayload = await appointmentsRes.json();
-      const billingPayload = await billingRes.json();
-      if (!appointmentsRes.ok) throw new Error(appointmentsPayload.message || "Failed to load appointments.");
-      if (!billingRes.ok) throw new Error(billingPayload.message || "Failed to load billing records.");
-      setAppointments(getRows(appointmentsPayload, "appointments"));
-      setBills(getRows(billingPayload, "data"));
+      setAppointments(await fetchAllPages("/appointments", { status: "FOR_BILLING" }));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -63,16 +57,11 @@ export default function CashierBilling() {
     load();
   }, [load]);
 
-  const paidAppointmentIds = useMemo(() => {
-    return new Set(bills.filter((bill) => bill.status === "PAID").map((bill) => Number(bill.appointment_id)));
-  }, [bills]);
-
   const payable = useMemo(() => {
     return appointments
       .filter((item) => item.status === "FOR_BILLING")
-      .filter((item) => !paidAppointmentIds.has(Number(item.id)))
       .sort((a, b) => `${a.date || ""} ${a.time || ""}`.localeCompare(`${b.date || ""} ${b.time || ""}`));
-  }, [appointments, paidAppointmentIds]);
+  }, [appointments]);
 
   const total = useMemo(() => {
     const subtotal = Number(fee || 0) + Number(procedureFee || 0);

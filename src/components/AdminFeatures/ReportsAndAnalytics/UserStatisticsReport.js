@@ -270,7 +270,7 @@ export default function UserStatisticsReport() {
           <MetricCard label="Total Users" value={totals.total} detail="All system accounts" />
           <MetricCard label="Verified Users" value={totals.active} detail={`${totals.activeRate} of all users`} accent={C.teal} />
           <MetricCard label="Deactivated Users" value={totals.deactivated} detail="Blocked or inactive accounts" accent={C.red} />
-          <MetricCard label="New This Month" value={totals.newThisMonth} detail="Recently created users" accent={C.blue} />
+          <MetricCard label="New This Month" value={totals.newThisMonth} detail="Created this calendar month" accent={C.blue} />
         </section>
 
         <div style={styles.gridTwo}>

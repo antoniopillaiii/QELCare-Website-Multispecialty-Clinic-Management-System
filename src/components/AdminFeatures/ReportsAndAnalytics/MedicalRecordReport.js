@@ -1,8 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { authFetch } from "../../../utils/auth";
-import Pagination, { usePagination } from "../../common/Pagination";
-import { manilaDateOf, manilaToday } from "../../../utils/manilaDate";
+import Pagination from "../../common/Pagination";
+import { safeCsvCell } from "../../../utils/exportUtils";
+import { buildQuery, fetchAllPages, fetchJson } from "../../../utils/paginatedFetch";
+
+const PAGE_SIZE = 25;
 
 function num(value) {
   const parsed = Number(value);
@@ -44,10 +46,6 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
-function csvCell(value) {
-  return `"${String(value ?? "").replace(/"/g, '""')}"`;
-}
-
 function downloadTextFile(filename, content, type) {
   const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
@@ -70,8 +68,10 @@ function MetricCard({ label, value, detail }) {
   );
 }
 
+// Doctor-entered text goes through safeCsvCell so a value such as
+// "=HYPERLINK(...)" opens as text in a spreadsheet, not as a formula.
 function buildCsv(records) {
-  const lines = [["Visit Date", "Patient", "Doctor", "Diagnosis", "Treatment Plan", "Prescriptions", "Confidential"].map(csvCell).join(",")];
+  const lines = [["Visit Date", "Patient", "Doctor", "Diagnosis", "Treatment Plan", "Prescriptions", "Confidential"].map(safeCsvCell).join(",")];
   records.forEach((record) => {
     lines.push([
       formatDate(record.visit_date),
@@ -81,7 +81,7 @@ function buildCsv(records) {
       record.treatment_plan,
       record.prescriptions,
       record.is_confidential ? "Yes" : "No",
-    ].map(csvCell).join(","));
+    ].map(safeCsvCell).join(","));
   });
   return lines.join("\n");
 }
@@ -123,10 +123,10 @@ function buildPrintableReport(records, metrics, diagnosisRows) {
     <tbody>${diagnosisRows.map((row) => `<tr><td>${escapeHtml(row.label)}</td><td>${row.count}</td></tr>`).join("")}</tbody>
   </table>
 
-  <h2>Recent Records</h2>
+  <h2>Records (${records.length})</h2>
   <table>
     <thead><tr><th>Visit Date</th><th>Patient</th><th>Doctor</th><th>Diagnosis</th><th>Prescription</th></tr></thead>
-    <tbody>${records.slice(0, 80).map((record) => `<tr><td>${escapeHtml(formatDate(record.visit_date))}</td><td>${escapeHtml(record.patient_name)}</td><td>${escapeHtml(record.doctor_name)}</td><td>${escapeHtml(record.diagnosis)}</td><td>${escapeHtml(record.prescriptions || "None")}</td></tr>`).join("")}</tbody>
+    <tbody>${records.map((record) => `<tr><td>${escapeHtml(formatDate(record.visit_date))}</td><td>${escapeHtml(record.patient_name)}</td><td>${escapeHtml(record.doctor_name)}</td><td>${escapeHtml(record.diagnosis)}</td><td>${escapeHtml(record.prescriptions || "None")}</td></tr>`).join("")}</tbody>
   </table>
   <script>
     window.addEventListener("load", function () {
@@ -139,76 +139,102 @@ function buildPrintableReport(records, metrics, diagnosisRows) {
 
 export default function MedicalRecordReport() {
   const navigate = useNavigate();
+  // The table shows one server page; the cards, the diagnosis summary and the
+  // CSV / PDF cover every record matching the search (no 100-row cap).
   const [records, setRecords] = useState([]);
-  // Paginate the detail table. This replaces a hard .slice(0, 100) that used to
-  // silently hide every record past the 100th — they are all reachable now.
-  const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(records, 25, "records");
+  const [total, setTotal] = useState(0);
+  const [pages, setPages] = useState(1);
+  const [page, setPage] = useState(1);
+  const [summary, setSummary] = useState(null);
   const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    const id = window.setTimeout(() => setQuery(search.trim()), 300);
+    return () => window.clearTimeout(id);
+  }, [search]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query]);
+
+  // Only the latest request may update the page.
+  const requestRef = useRef(0);
   const loadRecords = useCallback(async () => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     setError("");
     try {
-      const query = search.trim() ? `&search=${encodeURIComponent(search.trim())}` : "";
-      const response = await authFetch(`/medical-records?limit=500${query}`);
-      const payload = await response.json();
-      if (!response.ok || !payload.success) {
-        throw new Error(payload.message || "Failed to load medical records.");
-      }
-      const list = payload.records || payload.data || [];
-      setRecords(Array.isArray(list) ? list.map(normalizeRecord) : []);
+      const [list, totals] = await Promise.all([
+        fetchJson(`/medical-records${buildQuery({ search: query, page, limit: PAGE_SIZE })}`),
+        fetchJson(`/medical-records/summary${buildQuery({ search: query })}`),
+      ]);
+      if (requestId !== requestRef.current) return;
+      const rows = list.records || list.data || [];
+      setRecords(Array.isArray(rows) ? rows.map(normalizeRecord) : []);
+      setTotal(Number(list.total) || 0);
+      setPages(Number(list.pages) || 1);
+      setSummary(totals.data || null);
     } catch (err) {
-      setError(err.message || "Failed to load medical records.");
+      if (requestId === requestRef.current) setError(err.message || "Failed to load medical records.");
     } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) setLoading(false);
     }
-  }, [search]);
+  }, [page, query]);
 
   useEffect(() => {
     loadRecords();
   }, [loadRecords]);
 
-  const metrics = useMemo(() => {
-    // "This month" is the clinic's month (Asia/Manila).
-    const thisMonth = manilaToday().slice(0, 7);
-    return records.reduce((acc, record) => {
-      acc.total += 1;
-      if (manilaDateOf(record.created_at).slice(0, 7) === thisMonth) {
-        acc.thisMonth += 1;
-      }
-      if (record.prescriptions && record.prescriptions.trim()) acc.withPrescriptions += 1;
-      if (record.is_confidential) acc.confidential += 1;
-      return acc;
-    }, { total: 0, thisMonth: 0, withPrescriptions: 0, confidential: 0 });
-  }, [records]);
+  // "This month" is the clinic's month (Asia/Manila), counted by the server.
+  const metrics = {
+    total: summary?.total ?? 0,
+    thisMonth: summary?.created_this_month ?? 0,
+    withPrescriptions: summary?.with_prescriptions ?? 0,
+    confidential: summary?.confidential ?? 0,
+  };
+  const diagnosisRows = summary?.top_diagnoses || [];
 
-  const diagnosisRows = useMemo(() => {
-    const counts = new Map();
-    records.forEach((record) => {
-      const label = record.diagnosis || "No diagnosis encoded";
-      counts.set(label, (counts.get(label) || 0) + 1);
-    });
-    return [...counts.entries()]
-      .map(([label, count]) => ({ label, count }))
-      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
-      .slice(0, 10);
-  }, [records]);
-
-  function downloadCsv() {
-    downloadTextFile("qelcare-medical-records-report.csv", buildCsv(records), "text/csv;charset=utf-8");
+  async function loadAllRecords() {
+    const rows = await fetchAllPages("/medical-records", { search: query }, { idKey: "record_id" });
+    return rows.map(normalizeRecord);
   }
 
-  function downloadPdf() {
+  async function downloadCsv() {
+    setExporting(true);
+    setError("");
+    try {
+      downloadTextFile("qelcare-medical-records-report.csv", buildCsv(await loadAllRecords()), "text/csv;charset=utf-8");
+    } catch (err) {
+      setError(`Couldn't prepare the CSV: ${err.message || "please try again."}`);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function downloadPdf() {
+    // Open the window during the click (popup blockers), then fill it.
     const popup = window.open("", "_blank", "width=1000,height=800");
     if (!popup) {
       setError("Popup blocked. Allow popups, then click Download PDF again.");
       return;
     }
-    popup.document.open();
-    popup.document.write(buildPrintableReport(records, metrics, diagnosisRows));
-    popup.document.close();
+    setExporting(true);
+    setError("");
+    try {
+      const all = await loadAllRecords();
+      popup.document.open();
+      popup.document.write(buildPrintableReport(all, metrics, diagnosisRows));
+      popup.document.close();
+    } catch (err) {
+      popup.close();
+      setError(`Couldn't prepare the PDF: ${err.message || "please try again."}`);
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -231,7 +257,7 @@ export default function MedicalRecordReport() {
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter") loadRecords();
+                if (event.key === "Enter") setQuery(search.trim());
               }}
               placeholder="Patient, doctor, diagnosis"
               style={styles.input}
@@ -241,10 +267,10 @@ export default function MedicalRecordReport() {
             <button type="button" onClick={loadRecords} disabled={loading} style={styles.primaryButton}>
               {loading ? "Refreshing..." : "Refresh"}
             </button>
-            <button type="button" onClick={downloadPdf} disabled={loading || records.length === 0} style={styles.secondaryButton}>
-              Download PDF
+            <button type="button" onClick={downloadPdf} disabled={loading || exporting || total === 0} style={styles.secondaryButton}>
+              {exporting ? "Preparing..." : "Download PDF"}
             </button>
-            <button type="button" onClick={downloadCsv} disabled={loading || records.length === 0} style={styles.secondaryButton}>
+            <button type="button" onClick={downloadCsv} disabled={loading || exporting || total === 0} style={styles.secondaryButton}>
               Export CSV
             </button>
           </div>
@@ -313,7 +339,7 @@ export default function MedicalRecordReport() {
                   </tr>
                 </thead>
                 <tbody>
-                  {pageItems.map((record) => (
+                  {records.map((record) => (
                     <tr key={record.id}>
                       <td style={styles.td}>{formatDate(record.visit_date)}</td>
                       <td style={styles.td}>{record.patient_name}</td>
@@ -327,9 +353,9 @@ export default function MedicalRecordReport() {
 
               <Pagination
                 page={page}
-                totalPages={totalPages}
-                totalItems={totalItems}
-                pageSize={pageSize}
+                totalPages={pages}
+                totalItems={total}
+                pageSize={PAGE_SIZE}
                 onPageChange={setPage}
                 label="records"
               />

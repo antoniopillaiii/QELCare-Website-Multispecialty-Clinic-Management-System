@@ -1,8 +1,28 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import MainLayout from "../../Layout/MainLayout";
 import { authFetch } from "../../../utils/auth";
 import { C } from "../../../utils/adminTheme";
+
+// Every appointment status in the period; together they add up to the total.
+// Completed = paid visit (the Dashboard's definition); For Billing = finished
+// consultation still awaiting payment.
+const STATUS_ROWS = [
+  { key: "completed_visits", label: "Completed (paid)" },
+  { key: "for_billing_appointments", label: "For Billing (awaiting payment)" },
+  { key: "in_queue_appointments", label: "In Queue" },
+  { key: "confirmed_appointments", label: "Confirmed" },
+  { key: "pending_appointments", label: "Pending" },
+  { key: "rescheduled_appointments", label: "Rescheduled" },
+  { key: "cancelled_appointments", label: "Cancelled" },
+  { key: "no_show_appointments", label: "No-show" },
+];
+
+function sourceLabelOf(source) {
+  if (source === "gemini") return "Gemini narrative, checked against the clinic figures";
+  if (source === "fallback") return "Built-in report from the clinic figures";
+  return "Not generated yet";
+}
 
 const RANGE_OPTIONS = [
   { value: "past_7_days", label: "Past 7 Days" },
@@ -79,7 +99,7 @@ function getMetricCards(data) {
     {
       label: "Completed Visits",
       value: completedVisits,
-      sub: `${pct(completedVisits, totalAppointments)} completion rate`,
+      sub: `${pct(completedVisits, totalAppointments)} completion rate (paid); ${intValue(metrics.for_billing_appointments)} awaiting payment`,
       accent: C.teal,
     },
     {
@@ -109,7 +129,7 @@ function buildPrintableReport(insights) {
   const departments = insights?.charts?.departments || [];
   const appointmentDays = insights?.charts?.appointments_by_day || [];
   const queueDays = insights?.charts?.queue_by_day || [];
-  const sourceLabel = insights?.source === "gemini" ? "Gemini" : "Built-in fallback";
+  const sourceLabel = sourceLabelOf(insights?.source);
 
   return `<!doctype html>
 <html>
@@ -144,6 +164,13 @@ function buildPrintableReport(insights) {
     <div class="card"><div class="label">Queue Entries</div><div class="value">${intValue(metrics.queue_entries)}</div></div>
     <div class="card"><div class="label">Completion Rate</div><div class="value">${pct(metrics.completed_visits, metrics.total_appointments)}</div></div>
   </div>
+
+  <h2>Appointment Status (clinic records)</h2>
+  <table>
+    <thead><tr><th>Status</th><th>Appointments</th></tr></thead>
+    <tbody>${STATUS_ROWS.map((status) => `<tr><td>${escapeHtml(status.label)}</td><td>${intValue(metrics[status.key])}</td></tr>`).join("")}
+      <tr><td><strong>Total</strong></td><td><strong>${intValue(metrics.total_appointments)}</strong></td></tr></tbody>
+  </table>
 
   <h2>Generated Report</h2>
   <p>${escapeHtml(report.summary || "No generated summary available.")}</p>
@@ -184,28 +211,47 @@ function AnalyticsReports() {
   const cards = useMemo(() => getMetricCards(insights), [insights]);
   const report = insights?.report;
 
-  const generateInsights = async () => {
+  // Only the latest request may update the page, so a slow answer for a range
+  // that is no longer selected can't appear as the current report.
+  const requestRef = useRef(0);
+  const [generating, setGenerating] = useState(false);
+  const fetchInsights = useCallback(async (path, fallbackMessage) => {
+    const requestId = ++requestRef.current;
     try {
       setLoading(true);
+      setGenerating(path.endsWith("/ai-insights"));
       setError("");
 
-      const response = await authFetch(`/analytics/ai-insights?range=${encodeURIComponent(range)}`);
+      const response = await authFetch(`${path}?range=${encodeURIComponent(range)}`);
       if (!response?.ok) {
         const payload = response ? await response.json().catch(() => ({})) : {};
-        throw new Error(payload.message || "Failed to generate AI insights.");
+        throw new Error(payload.message || fallbackMessage);
       }
 
       const payload = await response.json();
-      setInsights(payload.data || null);
+      if (requestId === requestRef.current) setInsights(payload.data || null);
     } catch (err) {
-      setError(err.message || "Failed to generate AI insights.");
+      if (requestId === requestRef.current) setError(err.message || fallbackMessage);
     } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) {
+        setLoading(false);
+        setGenerating(false);
+      }
     }
-  };
+  }, [range]);
+
+  // Opening the page or changing the range shows that range's clinic figures
+  // (no AI call) and drops any report written for the previous range.
+  useEffect(() => {
+    setInsights(null);
+    fetchInsights("/analytics/insights-metrics", "Failed to load analytics.");
+  }, [fetchInsights]);
+
+  // The AI runs only on an explicit Generate.
+  const generateInsights = () => fetchInsights("/analytics/ai-insights", "Failed to generate AI insights.");
 
   const downloadPdf = () => {
-    if (!insights) return;
+    if (!report) return;
     const popup = window.open("", "_blank", "width=1000,height=800");
     if (!popup) {
       setError("Popup blocked. Allow popups, then click Download PDF again.");
@@ -275,21 +321,21 @@ function AnalyticsReports() {
                   whiteSpace: "nowrap",
                 }}
               >
-                {loading ? "Generating..." : "Generate AI Insights"}
+                {generating ? "Generating..." : "Generate AI Insights"}
               </button>
               <button
                 type="button"
                 onClick={downloadPdf}
-                disabled={!insights || loading}
+                disabled={!report || loading}
                 style={{
                   height: 42,
-                  border: `1px solid ${insights ? C.navy : C.line}`,
+                  border: `1px solid ${report ? C.navy : C.line}`,
                   borderRadius: 8,
                   padding: "0 16px",
-                  background: insights ? C.white : "#edf2f7",
-                  color: insights ? C.navy : C.muted,
+                  background: report ? C.white : "#edf2f7",
+                  color: report ? C.navy : C.muted,
                   fontWeight: 800,
-                  cursor: insights && !loading ? "pointer" : "not-allowed",
+                  cursor: report && !loading ? "pointer" : "not-allowed",
                   whiteSpace: "nowrap",
                 }}
               >
@@ -372,7 +418,7 @@ function AnalyticsReports() {
               <div>
                 <h2 style={{ margin: 0, color: C.text, fontSize: 18 }}>Generated Report</h2>
                 <p style={{ margin: "5px 0 0", color: C.muted, fontSize: 13 }}>
-                  {insights ? `${formatDate(insights.range?.startDate)} to ${formatDate(insights.range?.endDate)} / ${insights.source === "gemini" ? "Gemini" : "Built-in fallback"}` : "Select a range and generate insights."}
+                  {insights ? `${insights.range?.label || ""}: ${formatDate(insights.range?.startDate)} to ${formatDate(insights.range?.endDate)} / ${sourceLabelOf(insights.source)}` : "Select a range and generate insights."}
                 </p>
                 {insights?.fallback_reason ? (
                   <p style={{ margin: "5px 0 0", color: C.amber, fontSize: 12, fontWeight: 700 }}>
@@ -380,7 +426,7 @@ function AnalyticsReports() {
                   </p>
                 ) : null}
               </div>
-              {insights ? (
+              {report ? (
                 <button
                   type="button"
                   onClick={downloadPdf}
@@ -414,6 +460,14 @@ function AnalyticsReports() {
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+            <BreakdownPanel
+              title={`Appointment Status (total ${intValue(insights?.metrics?.total_appointments)})`}
+              empty="No appointments in this period."
+              rows={STATUS_ROWS.map((status) => ({ label: status.label, total: intValue(insights?.metrics?.[status.key]) }))}
+              labelKey="label"
+              valueKey="total"
+              accent={C.teal}
+            />
             <BreakdownPanel
               title="Department Visits"
               empty="No department activity in this period."
@@ -512,6 +566,9 @@ function ReportSkeleton() {
 function ReportContent({ report }) {
   return (
     <div style={{ color: C.text, lineHeight: 1.65, fontSize: 14 }}>
+      <p style={{ margin: "0 0 12px", color: C.muted, fontSize: 12 }}>
+        Narrative text. The cards and breakdowns come straight from clinic records; a Gemini narrative is only shown when every figure it states matches them.
+      </p>
       <p style={{ margin: "0 0 18px" }}>{report.summary}</p>
       <ul style={{ margin: "0 0 18px", paddingLeft: 20 }}>
         {(report.bullets || []).map((bullet, index) => (

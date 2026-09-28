@@ -1,6 +1,21 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { authFetch } from "../../../utils/auth";
+import { safeCsvCell } from "../../../utils/exportUtils";
+
+// Every appointment status in the period; together they add up to the total.
+// Completed = paid visit (the Dashboard's definition); For Billing = finished
+// consultation still awaiting payment.
+const STATUS_ROWS = [
+  { key: "completed_visits", label: "Completed (paid)" },
+  { key: "for_billing_appointments", label: "For Billing (awaiting payment)" },
+  { key: "in_queue_appointments", label: "In Queue" },
+  { key: "confirmed_appointments", label: "Confirmed" },
+  { key: "pending_appointments", label: "Pending" },
+  { key: "rescheduled_appointments", label: "Rescheduled" },
+  { key: "cancelled_appointments", label: "Cancelled" },
+  { key: "no_show_appointments", label: "No-show" },
+];
 
 const RANGE_OPTIONS = [
   { value: "past_7_days", label: "Past 7 days" },
@@ -40,32 +55,32 @@ function downloadTextFile(filename, content, type) {
   URL.revokeObjectURL(url);
 }
 
-function csvCell(value) {
-  return `"${String(value ?? "").replace(/"/g, '""')}"`;
-}
-
+// Department names are free text, so every cell goes through safeCsvCell
+// (a value starting with = + - @ opens as text, not as a formula).
 function buildCsv(data) {
   const metrics = data?.metrics || {};
   const departments = data?.charts?.departments || [];
   const apptDays = data?.charts?.appointments_by_day || [];
   const queueDays = data?.charts?.queue_by_day || [];
+  const row = (cells) => cells.map(safeCsvCell).join(",");
   const lines = [];
 
-  lines.push("Section,Metric,Value");
-  lines.push(["Metrics", "Total appointments", num(metrics.total_appointments)].map(csvCell).join(","));
-  lines.push(["Metrics", "Completed visits", num(metrics.completed_visits)].map(csvCell).join(","));
-  lines.push(["Metrics", "Queue entries", num(metrics.queue_entries)].map(csvCell).join(","));
-  lines.push(["Metrics", "Completion rate", `${percent(num(metrics.completed_visits), num(metrics.total_appointments))}%`].map(csvCell).join(","));
+  lines.push(row(["Section", "Metric", "Value"]));
+  lines.push(row(["Metrics", "Total appointments", num(metrics.total_appointments)]));
+  lines.push(row(["Metrics", "Completed visits (paid)", num(metrics.completed_visits)]));
+  lines.push(row(["Metrics", "Queue entries", num(metrics.queue_entries)]));
+  lines.push(row(["Metrics", "Completion rate", `${percent(num(metrics.completed_visits), num(metrics.total_appointments))}%`]));
+  STATUS_ROWS.forEach((status) => lines.push(row(["Status", status.label, num(metrics[status.key])])));
   lines.push("");
-  lines.push("Department,Appointments,Completed");
-  departments.forEach((row) => {
-    lines.push([row.department, num(row.total), num(row.completed)].map(csvCell).join(","));
+  lines.push(row(["Department", "Appointments", "Completed"]));
+  departments.forEach((dept) => {
+    lines.push(row([dept.department, num(dept.total), num(dept.completed)]));
   });
   lines.push("");
-  lines.push("Day,Appointments,Queue entries");
-  apptDays.forEach((row) => {
-    const queue = queueDays.find((q) => q.day_name === row.day_name);
-    lines.push([row.day_name, num(row.total), num(queue?.total)].map(csvCell).join(","));
+  lines.push(row(["Day", "Appointments", "Queue entries"]));
+  apptDays.forEach((day) => {
+    const queue = queueDays.find((q) => q.day_name === day.day_name);
+    lines.push(row([day.day_name, num(day.total), num(queue?.total)]));
   });
 
   return lines.join("\n");
@@ -79,7 +94,9 @@ function buildPrintableReport(data) {
   const apptDays = data?.charts?.appointments_by_day || [];
   const queueDays = data?.charts?.queue_by_day || [];
   const completionRate = percent(num(metrics.completed_visits), num(metrics.total_appointments));
-  const sourceLabel = data?.source === "gemini" ? "Gemini" : "Built-in fallback";
+  const sourceLabel = !data?.source
+    ? "Not generated (clinic figures only)"
+    : data.source === "gemini" ? "Gemini narrative, checked against the clinic figures" : "Built-in report from the clinic figures";
 
   return `<!doctype html>
 <html>
@@ -113,6 +130,13 @@ function buildPrintableReport(data) {
     <div class="card"><div class="label">Queue Entries</div><div class="value">${num(metrics.queue_entries)}</div></div>
     <div class="card"><div class="label">Completion Rate</div><div class="value">${completionRate}%</div></div>
   </div>
+
+  <h2>Appointment Status (clinic records)</h2>
+  <table>
+    <thead><tr><th>Status</th><th>Appointments</th></tr></thead>
+    <tbody>${STATUS_ROWS.map((status) => `<tr><td>${escapeHtml(status.label)}</td><td>${num(metrics[status.key])}</td></tr>`).join("")}
+      <tr><td><strong>Total</strong></td><td><strong>${num(metrics.total_appointments)}</strong></td></tr></tbody>
+  </table>
 
   <h2>AI Insight</h2>
   <p>${escapeHtml(report.summary || "No generated summary available.")}</p>
@@ -186,7 +210,7 @@ function SourceBadge({ source }) {
   const isGemini = source === "gemini";
   return (
     <span style={{ ...styles.sourceBadge, background: isGemini ? "#e8f7ef" : "#fff7df", color: isGemini ? "#176b3a" : "#8a5a00" }}>
-      {isGemini ? "Gemini" : "Built-in fallback"}
+      {isGemini ? "Gemini (fact-checked)" : "Built-in report"}
     </span>
   );
 }
@@ -196,28 +220,46 @@ export default function AppointmentAnalyticsReport() {
   const [range, setRange] = useState("past_7_days");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
+  // Only the latest request may update the page (a slow AI answer for an old
+  // range must not replace the figures of the range now selected).
+  const requestRef = useRef(0);
 
-  const loadReport = useCallback(async () => {
-    setLoading(true);
+  const fetchInsights = useCallback(async (path) => {
+    const requestId = ++requestRef.current;
     setError("");
     try {
-      const response = await authFetch(`/analytics/ai-insights?range=${encodeURIComponent(range)}`);
+      const response = await authFetch(`${path}?range=${encodeURIComponent(range)}`);
       const payload = await response.json();
       if (!response.ok || !payload.success) {
         throw new Error(payload.message || "Failed to load analytics report.");
       }
-      setData(payload.data);
+      if (requestId === requestRef.current) setData(payload.data);
     } catch (err) {
-      setError(err.message || "Failed to load analytics report.");
-    } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) setError(err.message || "Failed to load analytics report.");
     }
   }, [range]);
 
+  // Opening the page or changing the range loads the clinic figures only; it
+  // never calls the AI. Any narrative from the previous range is cleared.
+  const loadFigures = useCallback(async () => {
+    setLoading(true);
+    setData(null);
+    await fetchInsights("/analytics/insights-metrics");
+    setLoading(false);
+  }, [fetchInsights]);
+
+  // The AI runs only when the admin clicks Generate.
+  const generateReport = useCallback(async () => {
+    setGenerating(true);
+    await fetchInsights("/analytics/ai-insights");
+    setGenerating(false);
+  }, [fetchInsights]);
+
   useEffect(() => {
-    loadReport();
-  }, [loadReport]);
+    loadFigures();
+  }, [loadFigures]);
 
   const metrics = data?.metrics || {};
   const departments = data?.charts?.departments || [];
@@ -273,13 +315,13 @@ export default function AppointmentAnalyticsReport() {
           </label>
 
           <div style={styles.actions}>
-            <button type="button" onClick={loadReport} disabled={loading} style={styles.primaryButton}>
-              {loading ? "Generating..." : "Generate AI Insights"}
+            <button type="button" onClick={generateReport} disabled={loading || generating} style={styles.primaryButton}>
+              {generating ? "Generating..." : "Generate AI Insights"}
             </button>
-            <button type="button" onClick={downloadPdf} disabled={!data || loading} style={styles.secondaryButton}>
+            <button type="button" onClick={downloadPdf} disabled={!data || loading || generating} style={styles.secondaryButton}>
               Download PDF
             </button>
-            <button type="button" onClick={downloadCsv} disabled={!data || loading} style={styles.secondaryButton}>
+            <button type="button" onClick={downloadCsv} disabled={!data || loading || generating} style={styles.secondaryButton}>
               Export CSV
             </button>
           </div>
@@ -298,12 +340,20 @@ export default function AppointmentAnalyticsReport() {
               <MetricCard label="Active Exceptions" value={num(metrics.cancelled_appointments) + num(metrics.no_show_appointments) + num(metrics.rescheduled_appointments)} detail="Cancelled, no-show, rescheduled" />
             </section>
 
+            <MiniBars
+              title={`Appointment Status (total ${num(metrics.total_appointments)})`}
+              rows={STATUS_ROWS.map((status) => ({ label: status.label, total: num(metrics[status.key]) }))}
+              labelKey="label"
+              valueKey="total"
+              emptyText="No appointments in this period."
+            />
+
             <section style={styles.panel}>
               <div style={styles.panelHeader}>
                 <div>
                   <h2 style={styles.panelTitle}>Generated Report</h2>
                   <p style={styles.panelHint}>
-                    {data?.range ? `${data.range.startDate} to ${data.range.endDate}` : "No period loaded yet."}
+                    {data?.range ? `${data.range.label}: ${data.range.startDate} to ${data.range.endDate}` : "No period loaded yet."}
                   </p>
                 </div>
                 {data?.source ? <SourceBadge source={data.source} /> : null}
@@ -315,6 +365,9 @@ export default function AppointmentAnalyticsReport() {
 
               {report.summary ? (
                 <>
+                  <p style={styles.panelHint}>
+                    Narrative text. The figures above come straight from clinic records; a Gemini narrative is only shown when every figure it states matches them.
+                  </p>
                   <p style={styles.summary}>{report.summary}</p>
                   <ul style={styles.bulletList}>
                     {(report.bullets || []).map((bullet, index) => (
@@ -324,7 +377,9 @@ export default function AppointmentAnalyticsReport() {
                   <p style={styles.recommendation}>{report.recommendation}</p>
                 </>
               ) : (
-                <div style={styles.empty}>No generated report yet.</div>
+                <div style={styles.empty}>
+                  No report generated for {data?.range?.label ? data.range.label.toLowerCase() : "this period"} yet. Click Generate AI Insights to write one.
+                </div>
               )}
             </section>
 

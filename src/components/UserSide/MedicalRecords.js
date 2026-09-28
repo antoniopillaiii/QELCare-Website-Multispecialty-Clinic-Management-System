@@ -58,8 +58,20 @@ export default function MedicalRecords({ appointment, latestVital, onCreated }) 
   const isConsultationEntry = canCreate && Boolean(appointment);
 
   const [records, setRecords] = useState([]);
-  // Paginate the consultation records list (same behaviour as the mobile app).
-  const { page, totalPages, pageItems, setPage, pageSize, totalItems } = usePagination(records, 10, "records");
+  // The staff list (no patient in context) is paged by the server so every
+  // record is reachable; a patient's own history and a consultation's patient
+  // history come back whole and are paged here (same behaviour as the mobile app).
+  const serverPaged = !isPatient && !appointment?.patient_id;
+  const clientPaging = usePagination(records, 10, "records");
+  const [serverPage, setServerPage] = useState(1);
+  const [serverTotal, setServerTotal] = useState(0);
+  const [serverPages, setServerPages] = useState(1);
+  const page = serverPaged ? serverPage : clientPaging.page;
+  const totalPages = serverPaged ? serverPages : clientPaging.totalPages;
+  const pageItems = serverPaged ? records : clientPaging.pageItems;
+  const setPage = serverPaged ? setServerPage : clientPaging.setPage;
+  const pageSize = 10;
+  const totalItems = serverPaged ? serverTotal : clientPaging.totalItems;
   const [appointments, setAppointments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -77,7 +89,7 @@ export default function MedicalRecords({ appointment, latestVital, onCreated }) 
         ? "/medical-records/me"
         : appointment?.patient_id
           ? `/medical-records/patient/${appointment.patient_id}`
-          : "/medical-records?limit=100";
+          : `/medical-records?page=${serverPage}&limit=10`;
 
       const [recordRes, appointmentRes] = await Promise.all([
         authFetch(recordEndpoint),
@@ -87,6 +99,10 @@ export default function MedicalRecords({ appointment, latestVital, onCreated }) 
       const recordPayload = await recordRes.json();
       if (!recordRes.ok) throw new Error(recordPayload.message || "Failed to load records.");
       setRecords(getRows(recordPayload, "records"));
+      if (serverPaged) {
+        setServerTotal(Number(recordPayload.total) || 0);
+        setServerPages(Number(recordPayload.pages) || 1);
+      }
 
       if (appointmentRes) {
         const appointmentPayload = await appointmentRes.json();
@@ -97,7 +113,7 @@ export default function MedicalRecords({ appointment, latestVital, onCreated }) 
     } finally {
       setLoading(false);
     }
-  }, [appointment, canCreate, isPatient]);
+  }, [appointment, canCreate, isPatient, serverPage, serverPaged]);
 
   useEffect(() => {
     load();
@@ -325,7 +341,7 @@ export default function MedicalRecords({ appointment, latestVital, onCreated }) 
       <Panel style={{ overflow: "hidden" }}>
         <div style={{ padding: "14px 16px", borderBottom: "1px solid #e8eef6" }}>
           <div style={{ fontSize: 15, fontWeight: 900, color: "#162235" }}>{isPatient ? "Consultation Records" : "Medical Records"}</div>
-          <div style={{ fontSize: 12, color: "#6b778c", marginTop: 2 }}>{records.length} record(s)</div>
+          <div style={{ fontSize: 12, color: "#6b778c", marginTop: 2 }}>{totalItems} record(s)</div>
         </div>
 
         {loading ? (

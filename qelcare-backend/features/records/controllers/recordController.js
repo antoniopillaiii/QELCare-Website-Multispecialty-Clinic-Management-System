@@ -1,6 +1,9 @@
 const MedicalRecord = require("../models/MedicalRecord");
 const Patient = require("../../patient/models/Patient");
 const logger = require("../../../shared/utils/activityLogger");
+const { isValidDateString } = require("../../../shared/utils/manilaTime");
+const { isPositiveInt } = require("../../../shared/utils/requestValidation");
+const { logSafeError } = require("../../../shared/utils/safeErrorLog");
 
 function getRecordId(record) {
   return record?.record_id || record?.id;
@@ -14,7 +17,7 @@ async function writeLog(req, payload) {
       ...payload,
     });
   } catch (err) {
-    console.error("Medical record activity log error:", err);
+    logSafeError("Medical record activity log error", err);
   }
 }
 
@@ -23,14 +26,46 @@ function viewerOf(req) {
   return { role: req.user?.role, userId: req.user?.user_id };
 }
 
-function assertDoctorOwnsRecord(req, record) {
-  if (req.user?.role !== "Doctor") return;
-  const recordDoctorId = Number(record.doctor_id || 0);
-  if (recordDoctorId && recordDoctorId !== Number(req.user.user_id)) {
-    const err = new Error("Doctors can only update their own medical records.");
-    err.statusCode = 403;
-    throw err;
+// List / summary filters: bad input is a 400, not a database error.
+function listQueryError(query) {
+  const idFilters = { patient_id: "patient", doctor_id: "doctor", appointment_id: "appointment" };
+  for (const [key, label] of Object.entries(idFilters)) {
+    if (query[key] && !isPositiveInt(query[key])) return `Invalid ${label} filter.`;
   }
+  for (const key of ["date_from", "date_to"]) {
+    if (query[key] && !isValidDateString(query[key])) return `Invalid ${key.replace("_", " ")}. Use YYYY-MM-DD.`;
+  }
+  if (query.date_from && query.date_to && query.date_from > query.date_to) {
+    return "The start date must be on or before the end date.";
+  }
+  return "";
+}
+
+// Same filters for the list and its summary. A doctor's list is always their
+// own records, whatever doctor_id is asked for.
+function filtersFrom(req) {
+  return {
+    search: req.query.search || "",
+    patient_id: req.query.patient_id || null,
+    doctor_id: req.user?.role === "Doctor" ? req.user.user_id : req.query.doctor_id || null,
+    appointment_id: req.query.appointment_id || null,
+    date_from: req.query.date_from || null,
+    date_to: req.query.date_to || null,
+    viewer: viewerOf(req),
+  };
+}
+
+// The doctor who owns a record: its doctor, else the linked appointment's
+// doctor (the same rule the confidentiality filter uses). A legacy record with
+// neither belongs only to a doctor who authored it; nobody else can claim it.
+function recordOwner(record) {
+  return Number(record.doctor_id || record.appointment_doctor_id || 0) || null;
+}
+
+function sendError(res, err, context, fallbackMessage) {
+  if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
+  logSafeError(context, err);
+  return res.status(500).json({ success: false, message: fallbackMessage });
 }
 
 const recordController = {
@@ -40,10 +75,10 @@ const recordController = {
         return res.status(403).json({ success: false, message: "Only doctors can create medical records." });
       }
 
-      const patientId = req.body.patient_id ? Number(req.body.patient_id) : null;
-      if (!patientId) {
-        return res.status(400).json({ success: false, message: "patient_id is required." });
+      if (!isPositiveInt(req.body?.patient_id)) {
+        return res.status(400).json({ success: false, message: "Select a valid patient." });
       }
+      const patientId = Number(req.body.patient_id);
 
       const patient = await Patient.findById(patientId);
       if (!patient) {
@@ -62,7 +97,7 @@ const recordController = {
         entityType: "medical_record",
         entityId: getRecordId(record),
         description: `Medical record #${getRecordId(record)} created for patient #${patientId}`,
-        metadata: { patient_id: patientId, appointment_id: req.body.appointment_id || null },
+        metadata: { patient_id: patientId, appointment_id: record.appointment_id || null },
       });
 
       res.status(201).json({
@@ -72,30 +107,38 @@ const recordController = {
         record,
       });
     } catch (err) {
-      if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
-      console.error("Create record error:", err);
-      res.status(500).json({ success: false, message: "Failed to create medical record." });
+      sendError(res, err, "Create record error", "Failed to create medical record.");
     }
   },
 
   async getAll(req, res) {
     try {
+      const queryError = listQueryError(req.query);
+      if (queryError) return res.status(400).json({ success: false, message: queryError });
+
       const result = await MedicalRecord.findAll({
-        search: req.query.search || "",
-        patient_id: req.query.patient_id || null,
-        doctor_id: req.user?.role === "Doctor" ? req.user.user_id : req.query.doctor_id || null,
-        appointment_id: req.query.appointment_id || null,
-        date_from: req.query.date_from || null,
-        date_to: req.query.date_to || null,
+        ...filtersFrom(req),
         page: req.query.page || 1,
         limit: req.query.limit || 20,
-        viewer: viewerOf(req),
       });
 
       res.json({ success: true, ...result });
     } catch (err) {
-      console.error("Get records error:", err);
-      res.status(500).json({ success: false, message: "Failed to fetch medical records." });
+      sendError(res, err, "Get records error", "Failed to fetch medical records.");
+    }
+  },
+
+  // Totals for the whole filtered dataset (Admin Medical Records cards,
+  // Medical Records Report), with the same per-role confidentiality filter.
+  async getSummary(req, res) {
+    try {
+      const queryError = listQueryError(req.query);
+      if (queryError) return res.status(400).json({ success: false, message: queryError });
+
+      const summary = await MedicalRecord.summarize(filtersFrom(req));
+      res.json({ success: true, data: summary });
+    } catch (err) {
+      sendError(res, err, "Records summary error", "Failed to fetch medical records summary.");
     }
   },
 
@@ -107,8 +150,7 @@ const recordController = {
       if (!record) return res.status(404).json({ success: false, message: "Medical record not found." });
       res.json({ success: true, data: record, record });
     } catch (err) {
-      console.error("Get record error:", err);
-      res.status(500).json({ success: false, message: "Failed to fetch medical record." });
+      sendError(res, err, "Get record error", "Failed to fetch medical record.");
     }
   },
 
@@ -117,8 +159,7 @@ const recordController = {
       const records = await MedicalRecord.findByPatient(req.params.patientId, viewerOf(req));
       res.json({ success: true, data: records, records });
     } catch (err) {
-      console.error("Get patient records error:", err);
-      res.status(500).json({ success: false, message: "Failed to fetch patient medical records." });
+      sendError(res, err, "Get patient records error", "Failed to fetch patient medical records.");
     }
   },
 
@@ -133,8 +174,7 @@ const recordController = {
       const records = await MedicalRecord.findByPatient(patient.id, { role: "PatientSelf" });
       res.json({ success: true, data: records, records });
     } catch (err) {
-      console.error("Get my records error:", err);
-      res.status(500).json({ success: false, message: "Failed to fetch your medical records." });
+      sendError(res, err, "Get my records error", "Failed to fetch your medical records.");
     }
   },
 
@@ -146,32 +186,51 @@ const recordController = {
 
       const current = await MedicalRecord.findById(req.params.id);
       if (!current) return res.status(404).json({ success: false, message: "Medical record not found." });
-      assertDoctorOwnsRecord(req, current);
 
-      const record = await MedicalRecord.update(req.params.id, {
-        ...req.body,
-        doctor_id: current.doctor_id || req.user.user_id,
+      const userId = Number(req.user.user_id);
+      const owner = recordOwner(current) || (Number(current.created_by) === userId ? userId : null);
+      if (owner !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: recordOwner(current)
+            ? "Doctors can only update their own medical records."
+            : "This record has no assigned doctor, so only the doctor who wrote it can update it.",
+        });
+      }
+
+      const changes = MedicalRecord.prepareUpdate(req.body, current);
+      if (!Object.keys(changes).length) {
+        // Nothing actually changes: no write, no audit entry.
+        return res.json({ success: true, changed: false, message: "No changes to save.", data: current, record: current });
+      }
+
+      const record = await MedicalRecord.update(req.params.id, changes, {
+        patientId: current.patient_id,
+        doctorId: owner,
+        assignDoctorId: current.doctor_id ? null : owner,
       });
-      if (!record) return res.status(404).json({ success: false, message: "Medical record not found." });
 
       await writeLog(req, {
         action: "RECORD_UPDATED",
         entityType: "medical_record",
         entityId: getRecordId(record),
         description: `Medical record #${getRecordId(record)} updated`,
-        metadata: { patient_id: record.patient_id, appointment_id: record.appointment_id || null },
+        metadata: {
+          patient_id: record.patient_id,
+          appointment_id: record.appointment_id || null,
+          fields: Object.keys(changes),
+        },
       });
 
       res.json({
         success: true,
+        changed: true,
         message: "Medical record updated.",
         data: record,
         record,
       });
     } catch (err) {
-      if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
-      console.error("Update record error:", err);
-      res.status(500).json({ success: false, message: "Failed to update medical record." });
+      sendError(res, err, "Update record error", "Failed to update medical record.");
     }
   },
 };
