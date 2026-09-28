@@ -170,6 +170,7 @@ export default function App() {
 
         <Route path="/cashier/dashboard" element={guard(["Cashier", "Admin"], <CashierDashboard />)} />
         <Route path="/cashier/billing" element={guard(["Cashier", "Admin"], <CashierBilling />)} />
+        <Route path="/cashier/transactions" element={guard(["Cashier", "Admin"], <AdminBilling pageTitle="Transactions" />)} />
         <Route path="/cashier/profile" element={guard(["Cashier"], <ProfileSettings />)} />
 
         <Route path="/dashboard" element={guard(["Patient"], <UserScreen />)} />

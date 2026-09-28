@@ -167,7 +167,7 @@ export default function CashierDashboard() {
           sub="All voided transactions"
           accent="#b94949"
           icon={<IconX color="#b94949" />}
-          onClick={() => navigate("/cashier/billing")}
+          onClick={() => navigate("/cashier/transactions")}
         />
       </div>
 

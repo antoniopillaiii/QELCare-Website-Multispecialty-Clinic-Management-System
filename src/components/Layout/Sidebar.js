@@ -58,6 +58,7 @@ const NAV_BY_ROLE = {
   Cashier: [
     { id: "dashboard", label: "Dashboard", icon: Icons.dashboard, path: "/cashier/dashboard" },
     { id: "billing", label: "Billing", icon: Icons.billing, path: "/cashier/billing" },
+    { id: "transactions", label: "Transactions", icon: Icons.logs, path: "/cashier/transactions" },
     { id: "profile", label: "Profile Settings", icon: Icons.profile, path: "/cashier/profile" },
   ],
   Patient: [

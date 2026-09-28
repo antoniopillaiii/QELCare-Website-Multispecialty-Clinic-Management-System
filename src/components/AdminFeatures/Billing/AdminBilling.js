@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MainLayout from "../../Layout/MainLayout";
 import Pagination from "../../common/Pagination";
+import ReasonModal from "../../common/ReasonModal";
+import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { CLINIC_TZ } from "../../../utils/manilaDate";
 import { buildQuery, fetchAllPages, fetchJson } from "../../../utils/paginatedFetch";
@@ -119,10 +121,15 @@ const EXPORT_COLUMNS = [
   { header: "Status", value: (txn) => (txn.status || "unknown").replace(/\b\w/g, (char) => char.toUpperCase()) },
 ];
 
-function AdminBilling() {
+// Admin: /admin/billing. Cashier: /cashier/transactions (same table, same
+// rules). Both roles may void a paid bill; a reason is required (server-enforced).
+function AdminBilling({ pageTitle = "Billing" }) {
   // One page of bills from the server. Search, source / status / Manila-date
   // filters, paging and exports all run against the whole billing table; the
   // summary cards are the server's totals over every bill.
+  const [voidTarget, setVoidTarget] = useState(null);
+  const [voiding, setVoiding] = useState(false);
+  const [notice, setNotice] = useState("");
   const [transactions, setTransactions] = useState([]);
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
@@ -242,8 +249,38 @@ function AdminBilling() {
     });
   };
 
+  // Voids the bill with the reason from the modal. The modal stays open (busy)
+  // until the server answers, so a second click can't send a second void.
+  const voidBill = async (reason) => {
+    const target = voidTarget;
+    if (!target || voiding) return;
+    setVoiding(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch(`/billing/${target.id}/void`, {
+        method: "PATCH",
+        body: JSON.stringify({ reason }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.success === false) {
+        throw new Error(payload.message || "Failed to void the payment.");
+      }
+      setNotice(`${target.reference} voided. The visit is back in Ready for Payment and can be billed again.`);
+      fetchBilling();
+    } catch (err) {
+      // E.g. already voided in another tab: reload the current state first
+      // (a successful reload clears the error box), then show why it failed.
+      await fetchTransactions();
+      setError(err.message || "Failed to void the payment.");
+    } finally {
+      setVoiding(false);
+      setVoidTarget(null);
+    }
+  };
+
   return (
-    <MainLayout pageTitle="Billing" pageSubtitle="Transaction history">
+    <MainLayout pageTitle={pageTitle} pageSubtitle="Transaction history">
       <div className="admin-billing">
         <div className="billing-header">
           <div>
@@ -269,6 +306,7 @@ function AdminBilling() {
         </div>
 
         {error && <div className="billing-alert">{error}</div>}
+        {notice && <div className="billing-notice" role="status">{notice}</div>}
 
         <div className="billing-summary-grid">
           <div className="billing-summary-card">
@@ -333,18 +371,19 @@ function AdminBilling() {
                   <th>Method</th>
                   <th>Date Paid</th>
                   <th>Status</th>
+                  <th className="actions-col">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan="6" className="empty-cell">
+                    <td colSpan="7" className="empty-cell">
                       Loading transactions...
                     </td>
                   </tr>
                 ) : pageItems.length === 0 ? (
                   <tr>
-                    <td colSpan="6" className="empty-cell">
+                    <td colSpan="7" className="empty-cell">
                       No billing transactions found.
                     </td>
                   </tr>
@@ -366,6 +405,20 @@ function AdminBilling() {
                         <span className={`status-pill status-${transaction.status || "unknown"}`}>
                           {(transaction.status || "unknown").replace(/\b\w/g, (char) => char.toUpperCase())}
                         </span>
+                      </td>
+                      <td data-label="Actions" className="actions-col">
+                        {transaction.status === "paid" ? (
+                          <button
+                            type="button"
+                            className="void-button"
+                            disabled={voiding}
+                            onClick={() => { setNotice(""); setVoidTarget(transaction); }}
+                          >
+                            Void
+                          </button>
+                        ) : (
+                          <span className="actions-none">—</span>
+                        )}
                       </td>
                     </tr>
                   ))
@@ -447,6 +500,47 @@ function AdminBilling() {
           border-radius: 8px;
           padding: 12px 14px;
           font-size: 14px;
+        }
+
+        .billing-notice {
+          border: 1px solid #b8e5cc;
+          background: #eaf8f0;
+          color: #0f6b3c;
+          border-radius: 8px;
+          padding: 12px 14px;
+          font-size: 14px;
+          font-weight: 600;
+        }
+
+        .actions-col {
+          text-align: right !important;
+          white-space: nowrap;
+        }
+
+        .void-button {
+          border: 1px solid #f1b4b4;
+          background: #ffffff;
+          color: #ad3131;
+          border-radius: 8px;
+          padding: 7px 12px;
+          font-size: 13px;
+          font-weight: 700;
+          font-family: inherit;
+          cursor: pointer;
+        }
+
+        .void-button:hover:not(:disabled) {
+          background: #fff4f4;
+          border-color: #ad3131;
+        }
+
+        .void-button:disabled {
+          cursor: not-allowed;
+          opacity: 0.6;
+        }
+
+        .actions-none {
+          color: #94a3b8;
         }
 
         .billing-summary-grid {
@@ -638,6 +732,19 @@ function AdminBilling() {
           }
         }
       `}</style>
+
+      {voidTarget && (
+        <ReasonModal
+          title="Void Payment"
+          subtitle={`${voidTarget.reference}${voidTarget.patient_name ? ` · ${voidTarget.patient_name}` : ""} · ${formatCurrency(voidTarget.amount)}`}
+          label="Void reason"
+          placeholder="Why is this payment being voided? (e.g. wrong amount entered)"
+          confirmText="Void Payment"
+          busy={voiding}
+          onClose={() => setVoidTarget(null)}
+          onConfirm={voidBill}
+        />
+      )}
     </MainLayout>
   );
 }
