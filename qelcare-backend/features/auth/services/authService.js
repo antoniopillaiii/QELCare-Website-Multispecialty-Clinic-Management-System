@@ -38,6 +38,10 @@ const PURPOSES = {
   PROFILE_UPDATE: "profile_update",
 };
 
+// Codes that may be sent by SMS: Forgot Password and Register Account only.
+// Every other code (e.g. profile changes) goes by email.
+const SMS_OTP_PURPOSES = new Set([PURPOSES.PASSWORD_RESET, PURPOSES.REGISTRATION]);
+
 const CODES = {
   OK: "OK",
   NO_ACCOUNT: "NO_ACCOUNT",
@@ -53,6 +57,7 @@ const CODES = {
   SMS_NOT_CONFIGURED: "SMS_NOT_CONFIGURED",
   SMS_RATE_LIMITED: "SMS_RATE_LIMITED",
   SMS_FAILED: "SMS_FAILED",
+  SMS_NOT_ALLOWED: "SMS_NOT_ALLOWED",
   NO_CODE: "NO_CODE",
   ALREADY_USED: "ALREADY_USED",
   EXPIRED: "EXPIRED",
@@ -223,7 +228,8 @@ async function deliverOtpSms(phone, otp) {
       return { success: false, status: 503, code: CODES.SMS_NOT_CONFIGURED, message: "SMS service is not configured. Use email instead." };
     }
     if (smsResult.rateLimited) {
-      return { success: false, status: 429, code: CODES.SMS_RATE_LIMITED, message: "SMS service is busy. Please wait and try again." };
+      // Also TextBee's daily/monthly plan cap, so point to email, not a retry.
+      return { success: false, status: 429, code: CODES.SMS_RATE_LIMITED, message: "SMS is unavailable right now. Please use Resend by email." };
     }
     return { success: false, status: 502, code: CODES.SMS_FAILED, message: "Failed to send SMS code. Please try again or use email." };
   }
@@ -257,6 +263,10 @@ async function sendOTP(email, options = {}) {
   const purpose = options.purpose || PURPOSES.PASSWORD_RESET;
 
   const channel = String(options.channel || "email").toLowerCase();
+
+  if (channel === "sms" && !SMS_OTP_PURPOSES.has(purpose)) {
+    return { success: false, status: 400, code: CODES.SMS_NOT_ALLOWED, message: "This code can only be sent by email." };
+  }
 
   try {
     let firstName = options.firstName;
