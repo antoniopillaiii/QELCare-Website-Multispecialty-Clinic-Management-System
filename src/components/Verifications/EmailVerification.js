@@ -14,8 +14,11 @@ const passwordValid = (pw) => Object.values(checkPassword(pw)).every(Boolean);
 
 export default function EmailVerification() {
   const navigate  = useNavigate();
-  const email     = sessionStorage.getItem("otp_email") || "";
-  const flow      = sessionStorage.getItem("otp_flow") || "password_reset";
+  // Read once when the screen opens. A successful verify/reset clears these from
+  // sessionStorage; re-reading them made the screen jump to Forgot password
+  // instead of showing the success message.
+  const [email]   = useState(() => sessionStorage.getItem("otp_email") || "");
+  const [flow]    = useState(() => sessionStorage.getItem("otp_flow") || "password_reset");
   const isRegistration = flow === "registration";
 
   const [view, setView]               = useState("verify");   // "verify" | "reset"
@@ -30,6 +33,7 @@ export default function EmailVerification() {
   const [error, setError]             = useState("");
   const [success, setSuccess]         = useState("");
   const [loading, setLoading]         = useState(false);
+  const [sendingVia, setSendingVia]   = useState(null);   // "email" | "sms" while a new code is being sent
   const inputs = useRef([]);
 
   // Redirect if no email in session
@@ -125,7 +129,7 @@ export default function EmailVerification() {
   // mobile data. The backend looks up the account's phone; no number is typed here.
   const handleResend = async (channel = "email") => {
     if (!canResend || loading) return;
-    setLoading(true); setError("");
+    setLoading(true); setSendingVia(channel); setError("");
     try {
       const endpoint = isRegistration
         ? `${API_URL}/auth/patient/register/resend`
@@ -150,6 +154,7 @@ export default function EmailVerification() {
       setError("Cannot connect to server.");
     } finally {
       setLoading(false);
+      setSendingVia(null);
     }
   };
 
@@ -366,13 +371,13 @@ export default function EmailVerification() {
 
                     <div className="actions">
                       <button className="btn" onClick={handleVerify} disabled={loading || !!success}>
-                        {loading ? "Verifying..." : isRegistration ? "Verify Account" : "Verify Code"}
+                        {loading && !sendingVia ? "Verifying..." : isRegistration ? "Verify Account" : "Verify Code"}
                       </button>
                       <button className="btn-ghost" onClick={() => handleResend("email")} disabled={!canResend || loading}>
-                        {loading ? "Sending..." : canResend ? "Resend by email" : `Resend in ${resendIn}s`}
+                        {sendingVia === "email" ? "Sending..." : canResend ? "Resend by email" : `Resend in ${resendIn}s`}
                       </button>
                       <button className="btn-ghost" onClick={() => handleResend("sms")} disabled={!canResend || loading}>
-                        Send code via SMS
+                        {sendingVia === "sms" ? "Sending SMS..." : "Send code via SMS"}
                       </button>
                       <p className="otp-helper" style={{ textAlign: "center", marginTop: 2 }}>
                         Email slow on weak signal? Get the code by SMS instead.
