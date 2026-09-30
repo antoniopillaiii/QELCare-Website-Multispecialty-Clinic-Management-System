@@ -17,12 +17,14 @@ export default function ReasonModal({
   cancelText = "Cancel",
   tone = "danger", // "danger" | "primary"
   busy = false,
+  maxLength, // optional: caps the text and shows a character count
   onConfirm,
   onClose,
 }) {
   const [reason, setReason] = useState("");
   const trimmed = reason.trim();
   const accent = tone === "danger" ? "#ad3131" : "#163a6b";
+  const countId = "reason-modal-count";
 
   const submit = (event) => {
     event.preventDefault();
@@ -48,6 +50,8 @@ export default function ReasonModal({
             value={reason}
             placeholder={placeholder}
             disabled={busy}
+            maxLength={maxLength}
+            aria-describedby={maxLength ? countId : undefined}
             onChange={(event) => setReason(event.target.value)}
             style={{
               width: "100%",
@@ -64,6 +68,11 @@ export default function ReasonModal({
             }}
           />
         </label>
+        {maxLength && (
+          <span id={countId} style={{ justifySelf: "end", marginTop: -8, color: "#5a6a7e", fontSize: 12, fontWeight: 700 }}>
+            {reason.length}/{maxLength} characters
+          </span>
+        )}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
           <button type="button" onClick={onClose} disabled={busy} style={buttonStyle(false, busy, accent)}>

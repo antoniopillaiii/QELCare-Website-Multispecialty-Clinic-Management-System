@@ -5,88 +5,28 @@ import Pagination from "../../common/Pagination";
 import ReasonModal from "../../common/ReasonModal";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
-import { CLINIC_TZ } from "../../../utils/manilaDate";
-import { buildQuery, fetchAllPages, fetchJson } from "../../../utils/paginatedFetch";
-
-const pesoFormatter = new Intl.NumberFormat("en-PH", {
-  style: "currency",
-  currency: "PHP",
-});
-
-// Payment times are shown on the clinic's clock (Asia/Manila).
-const dateFormatter = new Intl.DateTimeFormat("en-PH", {
-  timeZone: CLINIC_TZ,
-  year: "numeric",
-  month: "short",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-});
-
-const methodLabels = {
-  cash: "Cash",
-  gcash: "Online",
-  maya: "Online",
-  card: "Online",
-  online: "Online",
-  hmo: "HMO",
-  insurance: "HMO",
-  philhealth: "HMO",
-};
-
-const methodDetailLabels = {
-  cash: "Cash",
-  gcash: "GCash",
-  maya: "Maya",
-  card: "Card",
-  online: "Online Payment",
-  hmo: "HMO",
-  insurance: "Insurance",
-  philhealth: "PhilHealth",
-};
-
-function normalizeText(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function normalizeMethod(value) {
-  return normalizeText(value).replace(/\s+/g, "_");
-}
-
-function getPaymentSource(method) {
-  const normalized = normalizeMethod(method);
-  return methodLabels[normalized] || "Other";
-}
-
-function getPaymentMethodLabel(method) {
-  const normalized = normalizeMethod(method);
-  if (!normalized) return "Not specified";
-  return methodDetailLabels[normalized] || normalized.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function toNumber(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function toDateValue(value) {
-  if (!value) return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function formatCurrency(value) {
-  return pesoFormatter.format(toNumber(value));
-}
-
-function formatPaidAt(value) {
-  const date = toDateValue(value);
-  return date ? dateFormatter.format(date) : "Not recorded";
-}
+import { buildQuery, describeLoadError, fetchAllPages, fetchJson } from "../../../utils/paginatedFetch";
+import TransactionDetails from "./TransactionDetails";
+import {
+  formatCurrency,
+  formatDateTime,
+  formatDay,
+  getPaymentMethodLabel,
+  getPaymentSource,
+  statusLabel,
+  toNumber,
+} from "./billingFormat";
 
 // Payment methods the billing API accepts. The source filter sends the
-// methods behind a source, so the grouping above stays the single mapping.
+// methods behind a source, so the grouping in billingFormat stays the single mapping.
 const BILLING_METHODS = ["cash", "gcash", "maya", "card", "bank_transfer", "philhealth", "hmo", "other"];
+
+const SOURCE_LABELS = { all: "All sources", cash: "Cash", online: "Online", hmo: "HMO", other: "Other" };
+const STATUS_LABELS = { paid: "Paid only", all: "All statuses", voided: "Voided" };
+
+// Same limit as the server.
+const MAX_VOID_REASON = 500;
+const RANGE_ERROR = "The start date must be on or before the end date.";
 
 function methodsForSource(source) {
   if (!source || source === "all") return [];
@@ -104,8 +44,7 @@ function normalizeTransaction(transaction) {
       `BILL-${transaction.billing_id || transaction.id || "N/A"}`,
     amount: toNumber(transaction.total_amount || transaction.amount_paid || transaction.amount),
     paidAt,
-    paidDate: toDateValue(paidAt),
-    status: normalizeText(transaction.status || "paid"),
+    status: String(transaction.status || "paid").trim().toLowerCase(),
     paymentMethod: transaction.payment_method || transaction.method,
     paymentSource: getPaymentSource(transaction.payment_method || transaction.method),
   };
@@ -116,29 +55,45 @@ const PAGE_SIZE = 10;
 const EXPORT_COLUMNS = [
   { header: "OR / Reference", value: (txn) => txn.reference || "" },
   { header: "Patient", value: (txn) => txn.patient_name || "" },
-  { header: "Amount Paid", value: (txn) => formatCurrency(txn.amount) },
+  { header: "Amount (PHP)", type: "number", value: (txn) => txn.amount.toFixed(2) },
   { header: "Payment Source", value: (txn) => txn.paymentSource || "" },
   { header: "Method", value: (txn) => getPaymentMethodLabel(txn.paymentMethod) },
-  { header: "Date Paid", value: (txn) => formatPaidAt(txn.paidAt) },
-  { header: "Status", value: (txn) => (txn.status || "unknown").replace(/\b\w/g, (char) => char.toUpperCase()) },
+  { header: "Date Paid", value: (txn) => formatDateTime(txn.paidAt) },
+  { header: "Status", value: (txn) => statusLabel(txn.status) },
+  { header: "Collected By", value: (txn) => txn.cashier_name || "" },
+  { header: "Voided At", value: (txn) => (txn.voided_at ? formatDateTime(txn.voided_at) : "") },
+  { header: "Voided By", value: (txn) => txn.voided_by_name || "" },
+  { header: "Void Reason", value: (txn) => txn.void_reason || "" },
 ];
+
+// "Paid Oct 01, 2026", "Paid Oct 01, 2026 to Oct 05, 2026", "Paid from ...", "Paid up to ...".
+function describeDates(from, to) {
+  if (from && to) return from === to ? `Paid ${formatDay(from)}` : `Paid ${formatDay(from)} to ${formatDay(to)}`;
+  if (from) return `Paid from ${formatDay(from)}`;
+  if (to) return `Paid up to ${formatDay(to)}`;
+  return "Any date";
+}
 
 // Admin: /admin/billing. Cashier: /cashier/transactions (same table, same
 // rules). Both roles may void a paid bill; a reason is required (server-enforced).
 function AdminBilling({ pageTitle = "Billing" }) {
   // One page of bills from the server. Search, source / status / Manila-date
   // filters, paging and exports all run against the whole billing table; the
-  // summary cards are the server's totals over every bill.
+  // summary cards are the server's totals over every bill, and the table
+  // heading carries the totals for the current filters.
   const [voidTarget, setVoidTarget] = useState(null);
   const [voiding, setVoiding] = useState(false);
+  const [detailsTarget, setDetailsTarget] = useState(null);
   const [notice, setNotice] = useState("");
-  const [transactions, setTransactions] = useState([]);
-  const [total, setTotal] = useState(0);
-  const [pages, setPages] = useState(1);
+  const [actionError, setActionError] = useState("");
+  // The rows on screen and the exact query + page they belong to, so rows are
+  // never shown under filters they don't match.
+  const [list, setList] = useState({ key: null, rows: [], total: 0, pages: 1, summary: null });
+  const [listError, setListError] = useState("");
   const [page, setPage] = useState(1);
   const [dashboard, setDashboard] = useState(null);
+  const [dashboardError, setDashboardError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   // A link may open the page pre-filtered, e.g. the Cashier Dashboard's
   // "Today Revenue" (?from=&to= today) or "Voided" (?status=voided) cards.
@@ -149,6 +104,10 @@ function AdminBilling({ pageTitle = "Billing" }) {
     const status = ["paid", "all", "voided"].includes(params.get("status")) ? params.get("status") : "paid";
     return { search: "", method: "all", status, from: date("from"), to: date("to") };
   });
+
+  // Checked here so an impossible range never reaches the server or leaves
+  // old rows on screen under the new dates.
+  const rangeError = filters.from && filters.to && filters.from > filters.to ? RANGE_ERROR : "";
 
   // Search as you type, without a request per keystroke.
   useEffect(() => {
@@ -165,6 +124,7 @@ function AdminBilling({ pageTitle = "Billing" }) {
     date_from: filters.from,
     date_to: filters.to,
   }), [filters.from, filters.method, filters.status, filters.to, searchQuery]);
+  const queryKey = useMemo(() => JSON.stringify({ ...query, page }), [query, page]);
 
   // Any filter change goes back to page 1.
   useEffect(() => {
@@ -175,8 +135,9 @@ function AdminBilling({ pageTitle = "Billing" }) {
     try {
       const payload = await fetchJson("/billing/dashboard");
       setDashboard(payload?.data || null);
+      setDashboardError("");
     } catch (err) {
-      setError(err.message || "Unable to load billing summary.");
+      setDashboardError(describeLoadError(err, "Couldn't load the totals."));
     }
   }, []);
 
@@ -184,25 +145,33 @@ function AdminBilling({ pageTitle = "Billing" }) {
   const requestRef = useRef(0);
   const fetchTransactions = useCallback(async () => {
     const requestId = ++requestRef.current;
+    if (rangeError) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const payload = await fetchJson(`/billing${buildQuery({ ...query, page, limit: PAGE_SIZE })}`);
       if (requestId !== requestRef.current) return;
-      setTransactions(Array.isArray(payload?.data) ? payload.data : []);
-      setTotal(Number(payload.total) || 0);
-      setPages(Number(payload.pages) || 1);
-      setError("");
+      setList({
+        key: queryKey,
+        rows: Array.isArray(payload?.data) ? payload.data : [],
+        total: Number(payload.total) || 0,
+        pages: Number(payload.pages) || 1,
+        summary: payload.summary || null,
+      });
+      setListError("");
     } catch (err) {
-      if (requestId === requestRef.current) setError(err.message || "Unable to load billing transactions.");
+      if (requestId === requestRef.current) setListError(describeLoadError(err, "Couldn't load the transactions."));
     } finally {
       if (requestId === requestRef.current) setLoading(false);
     }
-  }, [page, query]);
+  }, [page, query, queryKey, rangeError]);
 
-  const fetchBilling = useCallback(() => {
-    fetchDashboard();
-    fetchTransactions();
-  }, [fetchDashboard, fetchTransactions]);
+  const fetchBilling = useCallback(
+    () => Promise.all([fetchDashboard(), fetchTransactions()]),
+    [fetchDashboard, fetchTransactions]
+  );
 
   useEffect(() => {
     fetchDashboard();
@@ -212,7 +181,10 @@ function AdminBilling({ pageTitle = "Billing" }) {
     fetchTransactions();
   }, [fetchTransactions]);
 
-  const pageItems = useMemo(() => transactions.map(normalizeTransaction), [transactions]);
+  const showingCurrent = !rangeError && list.key === queryKey;
+  const pageItems = useMemo(() => (showingCurrent ? list.rows.map(normalizeTransaction) : []), [list.rows, showingCurrent]);
+  const total = showingCurrent ? list.total : 0;
+  const filtered = showingCurrent ? list.summary : null;
 
   // Every bill matching the current filters, for the export.
   const loadAllRows = useCallback(
@@ -236,6 +208,42 @@ function AdminBilling({ pageTitle = "Billing" }) {
     };
   }, [dashboard]);
 
+  // A card shows a figure only once the totals have loaded; never ₱0.00 for
+  // "couldn't load".
+  const cardValue = (value) => {
+    if (dashboard) return formatCurrency(value);
+    return dashboardError ? "–" : "...";
+  };
+
+  // Nothing to show for the current filters vs. a refresh that failed while
+  // the last good figures stay on screen.
+  const loadIssue = (() => {
+    const reason = listError || dashboardError;
+    if (!reason || loading) return null;
+    const nothingShown = (listError && !showingCurrent && !rangeError) || (dashboardError && !dashboard);
+    return nothingShown
+      ? { tone: "error", text: `Couldn't load the transactions. ${reason}` }
+      : { tone: "warning", text: `Couldn't refresh, so what's shown may be out of date. ${reason}` };
+  })();
+
+  const filterDescription = [
+    STATUS_LABELS[filters.status] || "Paid only",
+    SOURCE_LABELS[filters.method] || "All sources",
+    describeDates(filters.from, filters.to),
+    searchQuery ? `Search "${searchQuery}"` : "",
+  ].filter(Boolean).join(" · ");
+
+  const exportSubtitle = filtered
+    ? [
+        filterDescription,
+        `${total} transaction${total === 1 ? "" : "s"}`,
+        filters.status === "voided" ? "" : `Paid total ${formatCurrency(filtered.paid_total)}`,
+        filtered.voided_count > 0
+          ? `Voided ${formatCurrency(filtered.voided_total)}${filters.status === "voided" ? "" : " (not in the paid total)"}`
+          : "",
+      ].filter(Boolean).join(" · ")
+    : filterDescription;
+
   const updateFilter = (key, value) => {
     setFilters((current) => ({
       ...current,
@@ -253,13 +261,23 @@ function AdminBilling({ pageTitle = "Billing" }) {
     });
   };
 
+  const openVoid = (transaction) => {
+    setNotice("");
+    setActionError("");
+    setDetailsTarget(null);
+    setVoidTarget(transaction);
+  };
+
   // Voids the bill with the reason from the modal. The modal stays open (busy)
-  // until the server answers, so a second click can't send a second void.
+  // until the server answers, and the ref blocks clicks landing in the same
+  // instant (before "busy" renders), so only one void request is ever sent.
+  const voidInFlight = useRef(false);
   const voidBill = async (reason) => {
     const target = voidTarget;
-    if (!target || voiding) return;
+    if (!target || voidInFlight.current) return;
+    voidInFlight.current = true;
     setVoiding(true);
-    setError("");
+    setActionError("");
     setNotice("");
     try {
       const response = await authFetch(`/billing/${target.id}/void`, {
@@ -273,15 +291,27 @@ function AdminBilling({ pageTitle = "Billing" }) {
       setNotice(`${target.reference} voided. The visit is back in Ready for Payment and can be billed again.`);
       fetchBilling();
     } catch (err) {
-      // E.g. already voided in another tab: reload the current state first
-      // (a successful reload clears the error box), then show why it failed.
-      await fetchTransactions();
-      setError(err.message || "Failed to void the payment.");
+      // E.g. already voided in another tab: reload the list AND the totals
+      // first, then show why it failed.
+      await fetchBilling();
+      setActionError(describeLoadError(err, "Failed to void the payment."));
     } finally {
+      voidInFlight.current = false;
       setVoiding(false);
       setVoidTarget(null);
     }
   };
+
+  const recordsLine = () => {
+    if (rangeError || !showingCurrent) return loading ? "Loading..." : "—";
+    return `${total} record${total === 1 ? "" : "s"}`;
+  };
+
+  let tableMessage = null;
+  if (rangeError) tableMessage = "Fix the date range above to see transactions.";
+  else if (loading) tableMessage = "Loading transactions...";
+  else if (!showingCurrent && listError) tableMessage = "error";
+  else if (pageItems.length === 0) tableMessage = "No billing transactions found.";
 
   return (
     <MainLayout pageTitle={pageTitle} pageSubtitle="Transaction history">
@@ -291,17 +321,17 @@ function AdminBilling({ pageTitle = "Billing" }) {
             <h2>Billing Transactions</h2>
             <p>Paid amounts by date and payment source.</p>
           </div>
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <div className="billing-header-actions">
             <ExportMenu
               filename="qelcare-billing"
               title="QELCare Billing Transactions"
-              subtitle={`${total} transaction${total === 1 ? "" : "s"} matching the current filters`}
+              subtitle={exportSubtitle}
               sheetTitle="Billing"
               columns={EXPORT_COLUMNS}
               rows={pageItems}
               rowCount={total}
               loadRows={loadAllRows}
-              disabled={loading}
+              disabled={loading || !showingCurrent}
             />
             <button type="button" className="refresh-button" onClick={fetchBilling} disabled={loading}>
               {loading ? "Refreshing..." : "Refresh"}
@@ -309,60 +339,126 @@ function AdminBilling({ pageTitle = "Billing" }) {
           </div>
         </div>
 
-        {error && <div className="billing-alert">{error}</div>}
+        {loadIssue && (
+          <div className={loadIssue.tone === "error" ? "billing-alert billing-alert-row" : "billing-warning billing-alert-row"} role="alert">
+            <span>{loadIssue.text}</span>
+            <button type="button" className="secondary-button" onClick={fetchBilling}>
+              Try Again
+            </button>
+          </div>
+        )}
+        {actionError && <div className="billing-alert" role="alert">{actionError}</div>}
         {notice && <div className="billing-notice" role="status">{notice}</div>}
 
         <div className="billing-summary-grid">
           <div className="billing-summary-card">
             <span>Total Paid</span>
-            <strong>{formatCurrency(summary.totalPaid)}</strong>
+            <strong>{cardValue(summary.totalPaid)}</strong>
+            <small>All time</small>
           </div>
           <div className="billing-summary-card">
             <span>Today</span>
-            <strong>{formatCurrency(summary.todayPaid)}</strong>
+            <strong>{cardValue(summary.todayPaid)}</strong>
+            <small>Clinic day (Manila)</small>
           </div>
           <div className="billing-summary-card">
             <span>This Month</span>
-            <strong>{formatCurrency(summary.monthPaid)}</strong>
+            <strong>{cardValue(summary.monthPaid)}</strong>
+            <small>Current month</small>
           </div>
           <div className="billing-summary-card">
             <span>HMO Paid</span>
-            <strong>{formatCurrency(summary.hmoPaid)}</strong>
+            <strong>{cardValue(summary.hmoPaid)}</strong>
+            <small>All time</small>
           </div>
         </div>
 
         <div className="billing-filters">
-          <input
-            type="search"
-            value={filters.search}
-            onChange={(event) => updateFilter("search", event.target.value)}
-            placeholder="Search OR number or patient"
-          />
-          <select value={filters.method} onChange={(event) => updateFilter("method", event.target.value)}>
-            <option value="all">All sources</option>
-            <option value="cash">Cash</option>
-            <option value="online">Online</option>
-            <option value="hmo">HMO</option>
-            <option value="other">Other</option>
-          </select>
-          <select value={filters.status} onChange={(event) => updateFilter("status", event.target.value)}>
-            <option value="paid">Paid only</option>
-            <option value="all">All statuses</option>
-            <option value="voided">Voided</option>
-          </select>
-          <input type="date" value={filters.from} onChange={(event) => updateFilter("from", event.target.value)} />
-          <input type="date" value={filters.to} onChange={(event) => updateFilter("to", event.target.value)} />
+          <label className="billing-filter" htmlFor="billing-search">
+            <span>Search</span>
+            <input
+              id="billing-search"
+              type="search"
+              value={filters.search}
+              onChange={(event) => updateFilter("search", event.target.value)}
+              placeholder="OR number or patient"
+            />
+          </label>
+          <label className="billing-filter" htmlFor="billing-source">
+            <span>Payment source</span>
+            <select id="billing-source" value={filters.method} onChange={(event) => updateFilter("method", event.target.value)}>
+              <option value="all">All sources</option>
+              <option value="cash">Cash</option>
+              <option value="online">Online</option>
+              <option value="hmo">HMO</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <label className="billing-filter" htmlFor="billing-status">
+            <span>Status</span>
+            <select id="billing-status" value={filters.status} onChange={(event) => updateFilter("status", event.target.value)}>
+              <option value="paid">Paid only</option>
+              <option value="all">All statuses</option>
+              <option value="voided">Voided</option>
+            </select>
+          </label>
+          <label className="billing-filter" htmlFor="billing-from">
+            <span>Paid from</span>
+            <input
+              id="billing-from"
+              type="date"
+              value={filters.from}
+              max={filters.to || undefined}
+              aria-invalid={rangeError ? "true" : undefined}
+              aria-describedby={rangeError ? "billing-range-error" : undefined}
+              onChange={(event) => updateFilter("from", event.target.value)}
+            />
+          </label>
+          <label className="billing-filter" htmlFor="billing-to">
+            <span>Paid to</span>
+            <input
+              id="billing-to"
+              type="date"
+              value={filters.to}
+              min={filters.from || undefined}
+              aria-invalid={rangeError ? "true" : undefined}
+              aria-describedby={rangeError ? "billing-range-error" : undefined}
+              onChange={(event) => updateFilter("to", event.target.value)}
+            />
+          </label>
           <button type="button" className="secondary-button" onClick={clearFilters}>
             Clear
           </button>
+          {rangeError && (
+            <p id="billing-range-error" className="billing-filter-error" role="alert">
+              {rangeError}
+            </p>
+          )}
         </div>
 
         <div className="billing-table-card">
           <div className="table-heading">
             <div>
               <h3>Transactions</h3>
-              <p>{total} record{total === 1 ? "" : "s"}</p>
+              <p>{recordsLine()}</p>
             </div>
+            {filtered && filters.status === "voided" && (
+              <div className="table-totals" aria-live="polite">
+                <span>Voided total for these filters</span>
+                <strong>{formatCurrency(filtered.voided_total)}</strong>
+              </div>
+            )}
+            {filtered && filters.status !== "voided" && (
+              <div className="table-totals" aria-live="polite">
+                <span>Paid total for these filters</span>
+                <strong>{formatCurrency(filtered.paid_total)}</strong>
+                {filtered.voided_count > 0 && (
+                  <small>
+                    Voided {formatCurrency(filtered.voided_total)} ({filtered.voided_count}) not included
+                  </small>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="billing-table-wrap">
@@ -380,16 +476,19 @@ function AdminBilling({ pageTitle = "Billing" }) {
                 </tr>
               </thead>
               <tbody>
-                {loading ? (
+                {tableMessage ? (
                   <tr>
                     <td colSpan="8" className="empty-cell">
-                      Loading transactions...
-                    </td>
-                  </tr>
-                ) : pageItems.length === 0 ? (
-                  <tr>
-                    <td colSpan="8" className="empty-cell">
-                      No billing transactions found.
+                      {tableMessage === "error" ? (
+                        <span className="empty-error">
+                          Couldn't load transactions for these filters.
+                          <button type="button" className="secondary-button" onClick={fetchBilling}>
+                            Try Again
+                          </button>
+                        </span>
+                      ) : (
+                        tableMessage
+                      )}
                     </td>
                   </tr>
                 ) : (
@@ -406,25 +505,34 @@ function AdminBilling({ pageTitle = "Billing" }) {
                         </span>
                       </td>
                       <td data-label="Method">{getPaymentMethodLabel(transaction.paymentMethod)}</td>
-                      <td data-label="Date Paid">{formatPaidAt(transaction.paidAt)}</td>
+                      <td data-label="Date Paid">{formatDateTime(transaction.paidAt)}</td>
                       <td data-label="Status">
                         <span className={`status-pill status-${transaction.status || "unknown"}`}>
-                          {(transaction.status || "unknown").replace(/\b\w/g, (char) => char.toUpperCase())}
+                          {statusLabel(transaction.status)}
                         </span>
                       </td>
                       <td data-label="Actions" className="actions-col">
-                        {transaction.status === "paid" ? (
+                        <span className="row-actions">
                           <button
                             type="button"
-                            className="void-button"
-                            disabled={voiding}
-                            onClick={() => { setNotice(""); setVoidTarget(transaction); }}
+                            className="details-button"
+                            aria-label={`Details for ${transaction.reference}`}
+                            onClick={() => { setNotice(""); setDetailsTarget(transaction); }}
                           >
-                            Void
+                            Details
                           </button>
-                        ) : (
-                          <span className="actions-none">—</span>
-                        )}
+                          {transaction.status === "paid" && (
+                            <button
+                              type="button"
+                              className="void-button"
+                              aria-label={`Void ${transaction.reference}`}
+                              disabled={voiding}
+                              onClick={() => openVoid(transaction)}
+                            >
+                              Void
+                            </button>
+                          )}
+                        </span>
                       </td>
                     </tr>
                   ))
@@ -433,10 +541,10 @@ function AdminBilling({ pageTitle = "Billing" }) {
             </table>
           </div>
 
-          {!loading && (
+          {!loading && showingCurrent && (
             <Pagination
               page={page}
-              totalPages={pages}
+              totalPages={list.pages}
               totalItems={total}
               pageSize={PAGE_SIZE}
               onPageChange={setPage}
@@ -458,6 +566,12 @@ function AdminBilling({ pageTitle = "Billing" }) {
           justify-content: space-between;
           gap: 16px;
           align-items: flex-start;
+        }
+
+        .billing-header-actions {
+          display: flex;
+          gap: 10px;
+          align-items: center;
         }
 
         .billing-header h2,
@@ -508,6 +622,23 @@ function AdminBilling({ pageTitle = "Billing" }) {
           font-size: 14px;
         }
 
+        .billing-warning {
+          border: 1px solid #f3d38b;
+          background: #fff8e6;
+          color: #8a5a00;
+          border-radius: 8px;
+          padding: 12px 14px;
+          font-size: 14px;
+        }
+
+        .billing-alert-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          flex-wrap: wrap;
+        }
+
         .billing-notice {
           border: 1px solid #b8e5cc;
           background: #eaf8f0;
@@ -523,7 +654,14 @@ function AdminBilling({ pageTitle = "Billing" }) {
           white-space: nowrap;
         }
 
-        .void-button {
+        .row-actions {
+          display: inline-flex;
+          gap: 8px;
+          justify-content: flex-end;
+        }
+
+        .void-button,
+        .details-button {
           border: 1px solid #f1b4b4;
           background: #ffffff;
           color: #ad3131;
@@ -535,18 +673,24 @@ function AdminBilling({ pageTitle = "Billing" }) {
           cursor: pointer;
         }
 
+        .details-button {
+          border-color: #cddbeb;
+          color: #163a6b;
+        }
+
         .void-button:hover:not(:disabled) {
           background: #fff4f4;
           border-color: #ad3131;
         }
 
+        .details-button:hover {
+          background: #f4f7fb;
+          border-color: #163a6b;
+        }
+
         .void-button:disabled {
           cursor: not-allowed;
           opacity: 0.6;
-        }
-
-        .actions-none {
-          color: #94a3b8;
         }
 
         .billing-summary-grid {
@@ -572,26 +716,48 @@ function AdminBilling({ pageTitle = "Billing" }) {
         }
 
         .billing-summary-card strong {
+          display: block;
           color: #0f2744;
           font-size: 24px;
           line-height: 1.15;
           word-break: break-word;
         }
 
+        .billing-summary-card small {
+          display: block;
+          margin-top: 6px;
+          color: #5a6a7e;
+          font-size: 12px;
+        }
+
         .billing-filters {
           display: grid;
           grid-template-columns: minmax(220px, 1.5fr) repeat(4, minmax(130px, 1fr)) auto;
           gap: 10px;
-          align-items: center;
+          align-items: end;
           background: #ffffff;
           border: 1px solid #e4ecf5;
           border-radius: 8px;
           padding: 14px;
         }
 
+        .billing-filter {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          min-width: 0;
+        }
+
+        .billing-filter > span {
+          color: #5a6a7e;
+          font-size: 12px;
+          font-weight: 700;
+        }
+
         .billing-filters input,
         .billing-filters select {
           width: 100%;
+          box-sizing: border-box;
           border: 1px solid #d8e2ee;
           border-radius: 8px;
           padding: 10px 12px;
@@ -599,6 +765,19 @@ function AdminBilling({ pageTitle = "Billing" }) {
           background: #ffffff;
           font-size: 14px;
           min-width: 0;
+        }
+
+        .billing-filters input[aria-invalid="true"] {
+          border-color: #e6a4a0;
+          background: #fdf6f6;
+        }
+
+        .billing-filter-error {
+          grid-column: 1 / -1;
+          margin: 0;
+          color: #991b1b;
+          font-size: 13px;
+          font-weight: 700;
         }
 
         .billing-table-card {
@@ -612,8 +791,29 @@ function AdminBilling({ pageTitle = "Billing" }) {
           display: flex;
           justify-content: space-between;
           align-items: center;
+          gap: 16px;
+          flex-wrap: wrap;
           padding: 18px;
           border-bottom: 1px solid #e4ecf5;
+        }
+
+        .table-totals {
+          display: grid;
+          justify-items: end;
+          gap: 2px;
+          text-align: right;
+        }
+
+        .table-totals span,
+        .table-totals small {
+          color: #5a6a7e;
+          font-size: 12px;
+          font-weight: 600;
+        }
+
+        .table-totals strong {
+          color: #0f2744;
+          font-size: 20px;
         }
 
         .billing-table-wrap {
@@ -623,7 +823,7 @@ function AdminBilling({ pageTitle = "Billing" }) {
         .billing-table {
           width: 100%;
           border-collapse: collapse;
-          min-width: 760px;
+          min-width: 820px;
         }
 
         .billing-table th,
@@ -656,6 +856,15 @@ function AdminBilling({ pageTitle = "Billing" }) {
           text-align: center !important;
           color: #5a6a7e !important;
           padding: 34px 18px !important;
+        }
+
+        .empty-error {
+          display: inline-flex;
+          align-items: center;
+          gap: 12px;
+          flex-wrap: wrap;
+          justify-content: center;
+          color: #991b1b;
         }
 
         .source-pill,
@@ -709,6 +918,26 @@ function AdminBilling({ pageTitle = "Billing" }) {
           color: #475569;
         }
 
+        /* When the table has to scroll sideways, keep Details / Void in view. */
+        @media (min-width: 641px) {
+          .billing-table th.actions-col,
+          .billing-table td.actions-col {
+            position: sticky;
+            right: 0;
+            z-index: 1;
+            background: #ffffff;
+            box-shadow: -1px 0 0 #eef3fb;
+          }
+
+          .billing-table th.actions-col {
+            background: #f8fafd;
+          }
+
+          .billing-table tbody tr:hover td.actions-col {
+            background: #f8fafd;
+          }
+        }
+
         @media (max-width: 1180px) {
           .billing-summary-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -736,8 +965,22 @@ function AdminBilling({ pageTitle = "Billing" }) {
           .secondary-button {
             width: 100%;
           }
+
+          .table-totals {
+            justify-items: start;
+            text-align: left;
+          }
         }
       `}</style>
+
+      {detailsTarget && (
+        <TransactionDetails
+          billId={detailsTarget.id}
+          reference={detailsTarget.reference}
+          onClose={() => setDetailsTarget(null)}
+          onVoid={(bill) => openVoid(normalizeTransaction(bill))}
+        />
+      )}
 
       {voidTarget && (
         <ReasonModal
@@ -747,6 +990,7 @@ function AdminBilling({ pageTitle = "Billing" }) {
           placeholder="Why is this payment being voided? (e.g. wrong amount entered)"
           confirmText="Void Payment"
           busy={voiding}
+          maxLength={MAX_VOID_REASON}
           onClose={() => setVoidTarget(null)}
           onConfirm={voidBill}
         />

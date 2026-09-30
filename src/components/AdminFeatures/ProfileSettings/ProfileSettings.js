@@ -1,8 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { X } from "lucide-react";
 import MainLayout from "../../Layout/MainLayout";
 import Modal from "../../common/Modal";
 import { API_URL, authFetch, getUserRole, logout } from "../../../utils/auth";
 import { CLINIC_TZ } from "../../../utils/manilaDate";
+import { describeLoadError } from "../../../utils/paginatedFetch";
 
 // Column widths enforced by the backend (users / user_addresses).
 const MAX_LENGTH = {
@@ -44,6 +46,46 @@ const SECOND_STEP_ERRORS = [
   "INVALID_CODE",
   "TOO_MANY_ATTEMPTS",
 ];
+
+// Which form field a validation message is about (the server sends plain
+// messages such as "Last name can only contain letters..."), so the field can
+// be marked as well as the message shown.
+const FIELD_MESSAGE_PATTERNS = [
+  [/^first name/i, "first_name"],
+  [/^last name/i, "last_name"],
+  [/^middle name/i, "middle_name"],
+  [/^suffix/i, "suffix"],
+  [/^alternate phone/i, "alternate_phone"],
+  [/^phone/i, "phone"],
+  [/email/i, "email"],
+  [/gender/i, "gender"],
+  [/birth/i, "date_of_birth"],
+  [/^region/i, "region_code"],
+  [/^province/i, "province_code"],
+  [/^municipality/i, "municipality_code"],
+  [/^barangay/i, "barangay_code"],
+  [/^address/i, "address_line"],
+];
+
+function fieldForMessage(message) {
+  const match = FIELD_MESSAGE_PATTERNS.find(([pattern]) => pattern.test(String(message || "")));
+  return match ? match[1] : null;
+}
+
+// { field: message } for every server message that names a form field.
+function fieldErrorsFrom(data) {
+  const messages = Array.isArray(data?.errors) && data.errors.length ? data.errors : [data?.message];
+  return messages.reduce((acc, message) => {
+    const field = fieldForMessage(message);
+    if (field && !acc[field]) acc[field] = message;
+    return acc;
+  }, {});
+}
+
+// Moves keyboard focus to a form field once it has rendered.
+function focusField(name) {
+  window.setTimeout(() => document.querySelector(`.ps-page [name="${name}"]`)?.focus(), 0);
+}
 
 // Value used to tell whether a field changed: case of the email and spacing of
 // a phone number don't count (the backend compares the same way).
@@ -212,10 +254,11 @@ function Field({ label, name, value, onChange, type = "text", placeholder = "", 
           disabled={disabled}
           maxLength={MAX_LENGTH[name]}
           aria-invalid={error ? "true" : undefined}
+          aria-describedby={error ? `${name}-error` : undefined}
         />
       </div>
       {error && (
-        <span className="ps-err">
+        <span className="ps-err" id={`${name}-error`}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="10" />
             <line x1="12" y1="8" x2="12" y2="12" />
@@ -339,11 +382,22 @@ export default function ProfileSettings() {
   const [confirmError, setConfirmError] = useState("");
   const [otpSending, setOtpSending] = useState(false);
 
+  const [loadError, setLoadError] = useState("");
+  const saveInFlight = useRef(false);
+  const passwordInFlight = useRef(false);
+
+  // Success messages clear themselves; errors stay until dismissed or replaced,
+  // so there's time to read them.
   const showAlert = useCallback((type, message) => {
     setAlert({ type, message });
     window.clearTimeout(showAlert.timer);
-    showAlert.timer = window.setTimeout(() => setAlert(null), 3500);
+    if (type === "success") showAlert.timer = window.setTimeout(() => setAlert(null), 4000);
   }, []);
+
+  const dismissAlert = useCallback(() => {
+    window.clearTimeout(showAlert.timer);
+    setAlert(null);
+  }, [showAlert]);
 
   const loadProfile = useCallback(async () => {
     setLoading(true);
@@ -359,13 +413,14 @@ export default function ProfileSettings() {
       setProfile(nextProfile);
       setForm(mapProfileToForm(nextProfile));
       setImageVersion(Date.now());
+      setLoadError("");
       if (nextProfile) syncStoredUser(nextProfile);
     } catch (error) {
-      showAlert("error", error.message || "Failed to load profile.");
+      setLoadError(describeLoadError(error, "Couldn't load your profile."));
     } finally {
       setLoading(false);
     }
-  }, [showAlert]);
+  }, []);
 
   useEffect(() => {
     loadProfile();
@@ -411,7 +466,7 @@ export default function ProfileSettings() {
       if (!res.ok || data.success === false) throw new Error(data.message || "Couldn't send the verification code.");
       return true;
     } catch (error) {
-      setConfirmError(error.message || "Couldn't send the verification code.");
+      setConfirmError(describeLoadError(error, "Couldn't send the verification code."));
       return false;
     } finally {
       setOtpSending(false);
@@ -434,6 +489,9 @@ export default function ProfileSettings() {
     const endpoint = isPatient ? "/auth/patient/profile" : "/users/me";
     if (isPatient) payload.username = profile?.username || "";
 
+    // Clicks landing in the same instant (before "Saving..." renders) send one save.
+    if (saveInFlight.current) return;
+    saveInFlight.current = true;
     setSaving(true);
     try {
       const res = await authFetch(endpoint, { method: "PUT", body: JSON.stringify(payload) });
@@ -445,6 +503,13 @@ export default function ProfileSettings() {
             `${data.message || "Verification failed."}${data.attempts_left !== undefined ? ` (${data.attempts_left} attempt${data.attempts_left === 1 ? "" : "s"} left)` : ""}`
           );
           return;
+        }
+        // Mark the field(s) the server rejected, not just the message.
+        const serverFieldErrors = fieldErrorsFrom(data);
+        const firstField = Object.keys(serverFieldErrors)[0];
+        if (firstField) {
+          setFieldErrors(serverFieldErrors);
+          focusField(firstField);
         }
         throw new Error(data.message || "Failed to save profile.");
       }
@@ -462,31 +527,34 @@ export default function ProfileSettings() {
       showAlert("success", data.message || "Profile updated.");
     } catch (error) {
       closeConfirm();
-      showAlert("error", error.message || "Failed to save profile.");
+      showAlert("error", describeLoadError(error, "Failed to save profile."));
     } finally {
+      saveInFlight.current = false;
       setSaving(false);
     }
   }
 
   async function saveProfile() {
-    if (!form.first_name.trim() || !form.last_name.trim()) {
-      showAlert("error", "First name and last name are required.");
-      return;
-    }
-
+    const errors = {};
+    if (!form.first_name.trim()) errors.first_name = "First name is required.";
+    if (!form.last_name.trim()) errors.last_name = "Last name is required.";
     if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
-      showAlert("error", "Enter a valid email address.");
-      return;
+      errors.email = "Enter a valid email address.";
     }
-
     const phoneErr = validatePhone(form.phone);
     const altErr = validatePhone(form.alternate_phone);
-    if (phoneErr || altErr) {
-      setFieldErrors({ phone: phoneErr, alternate_phone: altErr });
-      showAlert("error", phoneErr || altErr);
+    if (phoneErr) errors.phone = phoneErr;
+    if (altErr) errors.alternate_phone = altErr;
+
+    const firstInvalid = Object.keys(errors)[0];
+    if (firstInvalid) {
+      setFieldErrors(errors);
+      showAlert("error", errors[firstInvalid]);
+      focusField(firstInvalid);
       return;
     }
     setFieldErrors({});
+    if (alert?.type === "error") dismissAlert();
 
     const changed = (field) => comparable(field, form[field]) !== comparable(field, profile?.[field]);
 
@@ -565,7 +633,7 @@ export default function ProfileSettings() {
       await loadProfile();
       showAlert("success", "Profile picture updated.");
     } catch (error) {
-      showAlert("error", error.message || "Upload failed.");
+      showAlert("error", describeLoadError(error, "Upload failed."));
     } finally {
       setUploading(false);
     }
@@ -573,7 +641,7 @@ export default function ProfileSettings() {
 
   async function changePassword(event) {
     event?.preventDefault();
-    if (passwordSaving) return;
+    if (passwordInFlight.current) return;
     if (!passwordForm.currentPassword) {
       showAlert("error", "Current password is required.");
       return;
@@ -587,6 +655,8 @@ export default function ProfileSettings() {
       return;
     }
 
+    passwordInFlight.current = true;
+    if (alert?.type === "error") dismissAlert();
     setPasswordSaving(true);
     try {
       const res = await authFetch("/auth/password/change", {
@@ -609,14 +679,17 @@ export default function ProfileSettings() {
       showAlert("success", "Password changed. Please sign in again.");
       window.setTimeout(() => logout(), 1200);
     } catch (error) {
-      showAlert("error", error.message || "Password change failed.");
+      showAlert("error", describeLoadError(error, "Password change failed."));
     } finally {
+      passwordInFlight.current = false;
       setPasswordSaving(false);
     }
   }
 
   function cancelEdit() {
     setForm(mapProfileToForm(profile));
+    setFieldErrors({});
+    if (alert?.type === "error") dismissAlert();
     setEditing(false);
   }
 
@@ -624,9 +697,21 @@ export default function ProfileSettings() {
     <MainLayout pageTitle="Profile Settings" pageSubtitle={profileSubtitle}>
       <div className="ps-page">
         {alert && (
-          <div className={`ps-toast ${alert.type}`}>
-            <span className="ps-toast-dot" />
-            {alert.message}
+          <div className={`ps-toast ${alert.type}`} role={alert.type === "error" ? "alert" : "status"}>
+            <span className="ps-toast-dot" aria-hidden="true" />
+            <span className="ps-toast-text">{alert.message}</span>
+            <button type="button" className="ps-toast-close" onClick={dismissAlert} aria-label="Dismiss message">
+              <X size={15} />
+            </button>
+          </div>
+        )}
+
+        {loadError && profile && (
+          <div className="ps-load-warning" role="alert">
+            <span>Couldn't refresh your profile, so what's shown may be out of date. {loadError}</span>
+            <button type="button" className="ps-btn ghost" onClick={loadProfile} disabled={loading}>
+              Try Again
+            </button>
           </div>
         )}
 
@@ -637,16 +722,22 @@ export default function ProfileSettings() {
             <div className="ps-id">
               <div className="ps-avatar-wrap">
                 <Avatar user={profile} imageVersion={imageVersion} />
-                <label className={`ps-camera ${uploading ? "disabled" : ""}`} title="Upload profile photo">
+                <label className={`ps-camera ${uploading || !profile ? "disabled" : ""}`} title="Upload profile photo">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
                     <circle cx="12" cy="13" r="4" />
                   </svg>
-                  <input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadProfilePicture} disabled={uploading} />
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    aria-label="Upload profile photo"
+                    onChange={uploadProfilePicture}
+                    disabled={uploading || !profile}
+                  />
                 </label>
               </div>
               <div className="ps-idtext">
-                <h2>{loading ? "Loading..." : displayName}</h2>
+                <h2>{!profile && loading ? "Loading..." : !profile && loadError ? "Profile unavailable" : displayName}</h2>
                 <div className="ps-email">{profile?.email || "No email recorded"}</div>
                 <div className="ps-chips">
                   <span className="role">{profile?.role || "User"}</span>
@@ -671,7 +762,21 @@ export default function ProfileSettings() {
           </div>
         </section>
 
-        {activeTab === "profile" && (
+        {/* Without the saved profile there's nothing safe to edit: an empty form
+            saved from here would blank the stored details. */}
+        {!profile && loadError && (
+          <section className="ps-card ps-panel ps-load-error" role="alert">
+            <div>
+              <h3>Couldn't load your profile</h3>
+              <p>{loadError}</p>
+            </div>
+            <button type="button" className="ps-btn primary" onClick={loadProfile} disabled={loading}>
+              {loading ? "Loading..." : "Try Again"}
+            </button>
+          </section>
+        )}
+
+        {activeTab === "profile" && (profile || !loadError) && (
           <section className="ps-card ps-panel">
             <div className="ps-panel-head">
               <div className="ps-htitle">
@@ -688,7 +793,7 @@ export default function ProfileSettings() {
               </div>
               {!editing ? (
                 <div className="ps-actions">
-                  <button type="button" className="ps-btn primary" onClick={() => setEditing(true)}>
+                  <button type="button" className="ps-btn primary" onClick={() => setEditing(true)} disabled={!profile}>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                       <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
@@ -712,14 +817,21 @@ export default function ProfileSettings() {
               <div className="ps-section">
                 <SectionHead icon="identity" title="Identity" />
                 <div className="ps-grid">
-                  <Field label="First Name" name="first_name" value={form.first_name} onChange={handleFormChange} disabled={!editing} required />
-                  <Field label="Last Name" name="last_name" value={form.last_name} onChange={handleFormChange} disabled={!editing} required />
-                  <Field label="Middle Name" name="middle_name" value={form.middle_name} onChange={handleFormChange} disabled={!editing} />
-                  <Field label="Suffix" name="suffix" value={form.suffix} onChange={handleFormChange} disabled={!editing} placeholder="Jr., Sr., III" />
-                  <label className="ps-field">
+                  <Field label="First Name" name="first_name" value={form.first_name} onChange={handleFormChange} disabled={!editing} error={fieldErrors.first_name} required />
+                  <Field label="Last Name" name="last_name" value={form.last_name} onChange={handleFormChange} disabled={!editing} error={fieldErrors.last_name} required />
+                  <Field label="Middle Name" name="middle_name" value={form.middle_name} onChange={handleFormChange} disabled={!editing} error={fieldErrors.middle_name} />
+                  <Field label="Suffix" name="suffix" value={form.suffix} onChange={handleFormChange} disabled={!editing} error={fieldErrors.suffix} placeholder="Jr., Sr., III" />
+                  <label className={`ps-field${fieldErrors.gender ? " err" : ""}`}>
                     <span className="lbl">Gender</span>
                     <div className="ps-control">
-                      <select name="gender" value={form.gender || ""} onChange={handleFormChange} disabled={!editing}>
+                      <select
+                        name="gender"
+                        value={form.gender || ""}
+                        onChange={handleFormChange}
+                        disabled={!editing}
+                        aria-invalid={fieldErrors.gender ? "true" : undefined}
+                        aria-describedby={fieldErrors.gender ? "gender-error" : undefined}
+                      >
                         <option value="">Not set</option>
                         {GENDERS.map((gender) => (
                           <option key={gender} value={gender}>
@@ -728,15 +840,20 @@ export default function ProfileSettings() {
                         ))}
                       </select>
                     </div>
+                    {fieldErrors.gender && (
+                      <span className="ps-err" id="gender-error">
+                        {fieldErrors.gender}
+                      </span>
+                    )}
                   </label>
-                  <Field label="Date of Birth" name="date_of_birth" value={form.date_of_birth} onChange={handleFormChange} disabled={!editing} type="date" />
+                  <Field label="Date of Birth" name="date_of_birth" value={form.date_of_birth} onChange={handleFormChange} disabled={!editing} error={fieldErrors.date_of_birth} type="date" />
                 </div>
               </div>
 
               <div className="ps-section">
                 <SectionHead icon="contact" title="Contact" />
                 <div className="ps-grid">
-                  <Field label="Email" name="email" value={form.email} onChange={handleFormChange} disabled={!editing} type="email" wide />
+                  <Field label="Email" name="email" value={form.email} onChange={handleFormChange} disabled={!editing} error={fieldErrors.email} type="email" wide />
                   <Field label="Phone" name="phone" value={form.phone} onChange={handleFormChange} disabled={!editing} error={fieldErrors.phone} placeholder="09XXXXXXXXX" />
                   <Field label="Alternate Phone" name="alternate_phone" value={form.alternate_phone} onChange={handleFormChange} disabled={!editing} error={fieldErrors.alternate_phone} placeholder="Optional" />
                 </div>
@@ -745,18 +862,18 @@ export default function ProfileSettings() {
               <div className="ps-section">
                 <SectionHead icon="address" title="Address" />
                 <div className="ps-grid">
-                  <Field label="Address Line" name="address_line" value={form.address_line} onChange={handleFormChange} disabled={!editing} wide />
-                  <Field label="Region Code" name="region_code" value={form.region_code} onChange={handleFormChange} disabled={!editing} />
-                  <Field label="Province Code" name="province_code" value={form.province_code} onChange={handleFormChange} disabled={!editing} />
-                  <Field label="Municipality Code" name="municipality_code" value={form.municipality_code} onChange={handleFormChange} disabled={!editing} />
-                  <Field label="Barangay Code" name="barangay_code" value={form.barangay_code} onChange={handleFormChange} disabled={!editing} />
+                  <Field label="Address Line" name="address_line" value={form.address_line} onChange={handleFormChange} disabled={!editing} error={fieldErrors.address_line} wide />
+                  <Field label="Region Code" name="region_code" value={form.region_code} onChange={handleFormChange} disabled={!editing} error={fieldErrors.region_code} />
+                  <Field label="Province Code" name="province_code" value={form.province_code} onChange={handleFormChange} disabled={!editing} error={fieldErrors.province_code} />
+                  <Field label="Municipality Code" name="municipality_code" value={form.municipality_code} onChange={handleFormChange} disabled={!editing} error={fieldErrors.municipality_code} />
+                  <Field label="Barangay Code" name="barangay_code" value={form.barangay_code} onChange={handleFormChange} disabled={!editing} error={fieldErrors.barangay_code} />
                 </div>
               </div>
             </div>
           </section>
         )}
 
-        {activeTab === "security" && (
+        {activeTab === "security" && (profile || !loadError) && (
           <div className="ps-security">
             <section className="ps-card ps-panel">
               <div className="ps-panel-head">
@@ -813,7 +930,7 @@ export default function ProfileSettings() {
                     ["uppercase", "Uppercase"],
                     ["lowercase", "Lowercase"],
                     ["number", "Number"],
-                    ["special", "Special character"],
+                    ["special", "Special character: @ $ ! % * ? & #"],
                   ].map(([key, label]) => (
                     <span key={key} className={checks[key] ? "ok" : ""}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
@@ -929,6 +1046,44 @@ export default function ProfileSettings() {
 .ps-toast.success { background: #effaf3; border-color: #bfe6cd; color: #137a4b; }
 .ps-toast.error { background: #fef1f1; border-color: #f6ced0; color: #b4323f; }
 .ps-toast-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+.ps-toast-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.ps-toast-close {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.ps-toast-close:hover { background: rgba(15, 39, 68, 0.08); }
+.ps-load-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid #f3d38b;
+  background: #fff8e6;
+  color: #8a5a00;
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.ps-load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 22px 24px;
+}
+.ps-load-error h3 { margin: 0; font-size: 16.5px; font-weight: 800; color: var(--danger); }
+.ps-load-error p { margin: 4px 0 0; font-size: 13.5px; color: var(--muted); }
 
 .ps-card {
   background: #fff;
@@ -1152,7 +1307,8 @@ export default function ProfileSettings() {
 .ps-field select:focus { border-color: var(--nv); box-shadow: 0 0 0 4px rgba(21, 58, 107, 0.12); }
 .ps-field input:disabled,
 .ps-field select:disabled { background: var(--bg-soft); border-color: #e8eef6; color: #3f5168; cursor: default; }
-.ps-field.err input { border-color: #e6a4a0; background: #fdf6f6; }
+.ps-field.err input,
+.ps-field.err select { border-color: #e6a4a0; background: #fdf6f6; }
 .ps-err { font-size: 12px; font-weight: 700; color: var(--danger); display: flex; align-items: center; gap: 5px; }
 
 .ps-security { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(340px, 0.95fr); gap: 20px; align-items: start; }

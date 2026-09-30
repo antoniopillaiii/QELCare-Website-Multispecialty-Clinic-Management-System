@@ -3,6 +3,9 @@ const logger = require("../../../shared/utils/activityLogger");
 const { isValidDateString } = require("../../../shared/utils/manilaTime");
 const { logSafeError } = require("../../../shared/utils/safeErrorLog");
 
+// Same limit as the void dialog's text box.
+const MAX_VOID_REASON = 500;
+
 function sendError(res, err, context, fallbackMessage) {
   if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
   logSafeError(context, err);
@@ -131,8 +134,16 @@ const billingController = {
 
   async voidBill(req, res) {
     try {
-      const reason = String(req.body?.reason || req.body?.void_reason || "").trim();
+      const body = req.body || {};
+      const raw = body.reason !== undefined && body.reason !== null && body.reason !== "" ? body.reason : body.void_reason;
+      if (raw !== undefined && raw !== null && typeof raw !== "string") {
+        return res.status(400).json({ success: false, message: "The void reason must be text." });
+      }
+      const reason = String(raw || "").trim();
       if (!reason) return res.status(400).json({ success: false, message: "A void reason is required." });
+      if (reason.length > MAX_VOID_REASON) {
+        return res.status(400).json({ success: false, message: `Keep the void reason to ${MAX_VOID_REASON} characters or fewer.` });
+      }
 
       const bill = await Billing.void(req.params.id, req.user.user_id, reason);
       if (!bill) return res.status(404).json({ success: false, message: "Billing not found or already voided." });

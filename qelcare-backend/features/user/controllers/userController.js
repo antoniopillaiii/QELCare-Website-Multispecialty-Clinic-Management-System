@@ -5,6 +5,7 @@ const { logSafeError } = require("../../../shared/utils/safeErrorLog");
 const bcrypt = require("bcrypt");
 const tokenManager = require("../../../shared/utils/tokenManager");
 const rules = require("../../../shared/utils/profileRules");
+const reauth = require("../../../shared/utils/reauthThrottle");
 const {
  validateEmail,
  validatePasswordStrength,
@@ -98,31 +99,8 @@ const getProfile = async (req, res) => {
 
 // Re-authentication for an email change: a signed-in session alone isn't
 // enough to move the account (and its password-reset codes) to a new address.
-// Wrong passwords are throttled per account, since the IP limit on the sign-in
-// and password endpoints doesn't cover this one.
-const EMAIL_CHANGE_MAX_FAILURES = 5;
-const EMAIL_CHANGE_WINDOW_MS = 15 * 60 * 1000;
-const emailChangeFailures = new Map(); // user_id -> { count, since }
-
-function emailChangeRetryAfter(userId) {
- const entry = emailChangeFailures.get(userId);
- if (!entry) return 0;
- const remaining = entry.since + EMAIL_CHANGE_WINDOW_MS - Date.now();
- if (remaining <= 0) {
- emailChangeFailures.delete(userId);
- return 0;
- }
- return entry.count >= EMAIL_CHANGE_MAX_FAILURES ? Math.ceil(remaining / 1000) : 0;
-}
-
-function recordEmailChangeFailure(userId) {
- const entry = emailChangeFailures.get(userId);
- if (!entry || entry.since + EMAIL_CHANGE_WINDOW_MS <= Date.now()) {
- emailChangeFailures.set(userId, { count: 1, since: Date.now() });
- } else {
- entry.count += 1;
- }
-}
+// Wrong passwords are throttled per account (shared with password change),
+// since the IP limit on the sign-in and password endpoints doesn't cover this one.
 
 function httpError(status, message, extra = {}) {
  const error = new Error(message);
@@ -182,9 +160,9 @@ const updateProfile = async (req, res) => {
  const result = await User.updateProfile(req.user.user_id, data, {
  beforeWrite: async (client, { changed }) => {
  if (!changed.includes("email")) return;
- const retryAfter = emailChangeRetryAfter(req.user.user_id);
+ const retryAfter = reauth.retryAfterSeconds(req.user.user_id);
  if (retryAfter) {
- throw httpError(429, `Too many incorrect passwords. Try again in ${Math.ceil(retryAfter / 60)} minute(s).`, {
+ throw httpError(429, reauth.tooManyMessage(retryAfter), {
  code: "TOO_MANY_ATTEMPTS",
  retry_after: retryAfter,
  });
@@ -195,10 +173,10 @@ const updateProfile = async (req, res) => {
  const row = await client.query("SELECT password FROM users WHERE user_id = $1", [req.user.user_id]);
  // 400, not 401: the client treats 401 as an expired session.
  if (!(await bcrypt.compare(currentPassword.slice(0, 128), row.rows[0]?.password || ""))) {
- recordEmailChangeFailure(req.user.user_id);
+ reauth.recordFailure(req.user.user_id);
  throw httpError(400, "Incorrect current password", { code: "INCORRECT_CURRENT_PASSWORD" });
  }
- emailChangeFailures.delete(req.user.user_id);
+ reauth.clearFailures(req.user.user_id);
  },
  afterWrite: async (client, { changed }) => {
  // A new sign-in email ends every other session; this one stays signed in.

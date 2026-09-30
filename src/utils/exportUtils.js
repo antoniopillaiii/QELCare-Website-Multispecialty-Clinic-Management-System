@@ -15,6 +15,9 @@
 //   - `value(row)` is an optional formatter so the export matches
 //     exactly what the screen shows (formatted dates, status labels…).
 //   - If `value` is omitted we fall back to row[key].
+//   - `type: "number"` marks a column of plain numbers (e.g. "1234.50") so
+//     Excel stores them as numbers that can be summed; every other column is
+//     kept as text.
 // ============================================================
 
 import React, { useEffect, useRef, useState } from "react";
@@ -107,7 +110,7 @@ export function exportToExcel(filenameBase, sheetTitle, columns, rows) {
   const body = rows
     .map(
       (row) =>
-        `<tr>${columns.map((column) => `<td style="mso-number-format:'\\@'">${escapeHtml(cellText(column, row))}</td>`).join("")}</tr>`
+        `<tr>${columns.map((column) => `<td style="mso-number-format:'${column.type === "number" ? "#,##0.00" : "\\@"}'">${escapeHtml(cellText(column, row))}</td>`).join("")}</tr>`
     )
     .join("");
 

@@ -4,6 +4,7 @@ const tokenManager = require("../../../shared/utils/tokenManager");
 const authService = require("../services/authService");
 const logger = require("../../../shared/utils/activityLogger");
 const passwordHistory = require("../../../shared/utils/passwordHistory");
+const reauth = require("../../../shared/utils/reauthThrottle");
 const { logSafeError } = require("../../../shared/utils/safeErrorLog");
 const {
   validateLoginInput,
@@ -441,6 +442,17 @@ const changePassword = async (req, res) => {
     const errors = validatePasswordChange(currentPassword, newPassword);
     if (errors.length > 0) return res.status(400).json({ success: false, errors, message: errors[0] });
 
+    // Per-account limit on wrong current passwords (shared with email change).
+    const retryAfter = reauth.retryAfterSeconds(req.user.user_id);
+    if (retryAfter) {
+      return res.status(429).json({
+        success: false,
+        code: "TOO_MANY_ATTEMPTS",
+        retry_after: retryAfter,
+        message: reauth.tooManyMessage(retryAfter),
+      });
+    }
+
     await client.query("BEGIN");
 
     const result = await client.query(
@@ -462,12 +474,14 @@ const changePassword = async (req, res) => {
     const valid = await bcrypt.compare(currentPassword, user.password);
     if (!valid) {
       await client.query("ROLLBACK");
+      reauth.recordFailure(req.user.user_id);
       return res.status(400).json({
         success: false,
         code: "INCORRECT_CURRENT_PASSWORD",
         message: "Incorrect current password",
       });
     }
+    reauth.clearFailures(req.user.user_id);
 
     // Cooldown: refuse a second change too soon after the last successful one.
     if (user.password_changed_at) {

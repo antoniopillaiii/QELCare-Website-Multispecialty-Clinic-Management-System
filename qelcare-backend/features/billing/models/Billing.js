@@ -127,6 +127,20 @@ function parseDiscount(type, pct) {
   return { discountType, discountPct };
 }
 
+// A void appends "VOID reason: <reason>" to the bill's notes (see void()). Split
+// it back out so screens can show the reason apart from any payment note.
+const VOID_MARKER = "VOID reason: ";
+function withVoidReason(bill) {
+  if (!bill) return bill;
+  const notes = bill.notes || "";
+  const at = bill.status === "VOIDED" ? notes.indexOf(VOID_MARKER) : -1;
+  return {
+    ...bill,
+    void_reason: at === -1 ? null : notes.slice(at + VOID_MARKER.length).trim() || null,
+    payment_notes: (at === -1 ? notes : notes.slice(0, at)).trim() || null,
+  };
+}
+
 const Billing = {
   // Atomic payment. In ONE transaction:
   //   1. lock the appointment row (FOR UPDATE) so concurrent cashiers serialize,
@@ -301,6 +315,7 @@ const Billing = {
            COALESCE(NULLIF(TRIM(CONCAT_WS(' ', p.first_name, p.last_name)), ''), p.name) AS patient_name,
            p.philhealth_no,
            COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''), u.username) AS cashier_name,
+           COALESCE(NULLIF(TRIM(CONCAT_WS(' ', vb.first_name, vb.last_name)), ''), vb.username) AS voided_by_name,
            TO_CHAR(a.date, 'YYYY-MM-DD') AS appointment_date,
            a.time::text AS appointment_time,
            COALESCE(NULLIF(TRIM(CONCAT_WS(' ', d.first_name, d.last_name)), ''), d.username) AS doctor_name,
@@ -308,6 +323,7 @@ const Billing = {
          FROM billing b
          JOIN patients p ON b.patient_id = p.id
          LEFT JOIN users u ON b.cashier_id = u.user_id
+         LEFT JOIN users vb ON b.voided_by = vb.user_id
          LEFT JOIN appointments a ON b.appointment_id = a.id
          LEFT JOIN users d ON a.doctor_id = d.user_id
          LEFT JOIN specialties s ON a.specialty_id = s.specialty_id
@@ -316,8 +332,14 @@ const Billing = {
          LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
         dataParams
       ),
+      // Count plus the money totals of every bill matching the filters (not
+      // just this page), so a screen can show e.g. today's cash total.
       db.query(
-        `SELECT COUNT(*)::int AS count
+        `SELECT COUNT(*)::int AS count,
+                COUNT(*) FILTER (WHERE b.status = 'PAID')::int AS paid_count,
+                COALESCE(SUM(b.total_amount) FILTER (WHERE b.status = 'PAID'), 0) AS paid_total,
+                COUNT(*) FILTER (WHERE b.status = 'VOIDED')::int AS voided_count,
+                COALESCE(SUM(b.total_amount) FILTER (WHERE b.status = 'VOIDED'), 0) AS voided_total
          FROM billing b
          JOIN patients p ON b.patient_id = p.id
          ${where}`,
@@ -325,13 +347,20 @@ const Billing = {
       ),
     ]);
 
-    const total = countResult.rows[0]?.count || 0;
+    const counts = countResult.rows[0] || {};
+    const total = counts.count || 0;
     return {
-      data: dataResult.rows,
+      data: dataResult.rows.map(withVoidReason),
       total,
       page: safePage,
       limit: safeLimit,
       pages: Math.max(1, Math.ceil(total / safeLimit)),
+      summary: {
+        paid_count: counts.paid_count || 0,
+        paid_total: counts.paid_total || "0",
+        voided_count: counts.voided_count || 0,
+        voided_total: counts.voided_total || "0",
+      },
     };
   },
 
@@ -361,7 +390,7 @@ const Billing = {
       [id]
     );
 
-    return result.rows[0] || null;
+    return withVoidReason(result.rows[0]) || null;
   },
 
   async findByAppointment(appointmentId) {
