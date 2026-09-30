@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import MainLayout from "../../Layout/MainLayout";
 import Pagination from "../../common/Pagination";
 import ReasonModal from "../../common/ReasonModal";
@@ -114,6 +115,7 @@ const PAGE_SIZE = 10;
 
 const EXPORT_COLUMNS = [
   { header: "OR / Reference", value: (txn) => txn.reference || "" },
+  { header: "Patient", value: (txn) => txn.patient_name || "" },
   { header: "Amount Paid", value: (txn) => formatCurrency(txn.amount) },
   { header: "Payment Source", value: (txn) => txn.paymentSource || "" },
   { header: "Method", value: (txn) => getPaymentMethodLabel(txn.paymentMethod) },
@@ -138,12 +140,14 @@ function AdminBilling({ pageTitle = "Billing" }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [filters, setFilters] = useState({
-    search: "",
-    method: "all",
-    status: "paid",
-    from: "",
-    to: "",
+  // A link may open the page pre-filtered, e.g. the Cashier Dashboard's
+  // "Today Revenue" (?from=&to= today) or "Voided" (?status=voided) cards.
+  const location = useLocation();
+  const [filters, setFilters] = useState(() => {
+    const params = new URLSearchParams(location.search);
+    const date = (key) => (/^\d{4}-\d{2}-\d{2}$/.test(params.get(key) || "") ? params.get(key) : "");
+    const status = ["paid", "all", "voided"].includes(params.get("status")) ? params.get("status") : "paid";
+    return { search: "", method: "all", status, from: date("from"), to: date("to") };
   });
 
   // Search as you type, without a request per keystroke.
@@ -366,6 +370,7 @@ function AdminBilling({ pageTitle = "Billing" }) {
               <thead>
                 <tr>
                   <th>OR / Reference</th>
+                  <th>Patient</th>
                   <th>Amount Paid</th>
                   <th>Payment Source</th>
                   <th>Method</th>
@@ -377,13 +382,13 @@ function AdminBilling({ pageTitle = "Billing" }) {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan="7" className="empty-cell">
+                    <td colSpan="8" className="empty-cell">
                       Loading transactions...
                     </td>
                   </tr>
                 ) : pageItems.length === 0 ? (
                   <tr>
-                    <td colSpan="7" className="empty-cell">
+                    <td colSpan="8" className="empty-cell">
                       No billing transactions found.
                     </td>
                   </tr>
@@ -393,6 +398,7 @@ function AdminBilling({ pageTitle = "Billing" }) {
                       <td data-label="OR / Reference">
                         <strong>{transaction.reference}</strong>
                       </td>
+                      <td data-label="Patient">{transaction.patient_name || "—"}</td>
                       <td data-label="Amount Paid">{formatCurrency(transaction.amount)}</td>
                       <td data-label="Payment Source">
                         <span className={`source-pill source-${transaction.paymentSource.toLowerCase()}`}>

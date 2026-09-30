@@ -17,12 +17,22 @@ function round2(value) {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 }
 
+// A JSON number, or text written as a plain decimal ("800", "800.50", "-5").
+// Anything else — hex ("0x320"), exponent ("8e2"), "Infinity", arrays — is NaN,
+// so it's rejected instead of being read as some other amount.
+const DECIMAL_TEXT = /^-?\d+(\.\d+)?$/;
+function toStrictNumber(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : NaN;
+  if (typeof value === "string" && DECIMAL_TEXT.test(value.trim())) return Number(value.trim());
+  return NaN;
+}
+
 // Strict money parsing: a malformed, negative or oversized amount is a 400,
 // never silently turned into 0 or clamped.
 function parseMoney(value, label) {
   if (typeof value === "string" && value.trim() === "") throw appError(400, `${label} is required.`);
-  const number = typeof value === "number" ? value : Number(value);
-  if ((typeof value !== "number" && typeof value !== "string") || !Number.isFinite(number)) {
+  const number = toStrictNumber(value);
+  if (!Number.isFinite(number)) {
     throw appError(400, `${label} must be a number.`);
   }
   if (number < 0) throw appError(400, `${label} can't be negative.`);
@@ -45,8 +55,9 @@ function normalizeLineItems(lineItems) {
 
     let quantity = 1;
     if (item.quantity !== undefined && item.quantity !== null && item.quantity !== "") {
-      quantity = Number(item.quantity);
-      if (!Number.isFinite(quantity) || quantity <= 0) throw appError(400, `${label}: quantity must be greater than zero.`);
+      quantity = toStrictNumber(item.quantity);
+      if (!Number.isFinite(quantity)) throw appError(400, `${label}: quantity must be a number.`);
+      if (quantity <= 0) throw appError(400, `${label}: quantity must be greater than zero.`);
     }
 
     const hasUnit = item.unit_price !== undefined && item.unit_price !== null && item.unit_price !== "";
@@ -100,8 +111,8 @@ function parseDiscount(type, pct) {
   }
   let discountPct = 0;
   if (pct !== undefined && pct !== null && pct !== "") {
-    discountPct = Number(pct);
-    if ((typeof pct !== "number" && typeof pct !== "string") || !Number.isFinite(discountPct)) {
+    discountPct = toStrictNumber(pct);
+    if (!Number.isFinite(discountPct)) {
       throw appError(400, "Discount percentage must be a number.");
     }
     if (discountPct < 0 || discountPct > 100) throw appError(400, "Discount percentage must be between 0 and 100.");

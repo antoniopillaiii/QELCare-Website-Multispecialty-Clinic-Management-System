@@ -2,7 +2,21 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import MainLayout from "../Layout/MainLayout";
 import { todayISO } from "../Workflow/ClinicUi";
-import { buildQuery, fetchAllPages, fetchJson } from "../../utils/paginatedFetch";
+import { buildQuery, describeLoadError, fetchAllPages, fetchJson } from "../../utils/paginatedFetch";
+import { CLINIC_TZ } from "../../utils/manilaDate";
+
+const AUTO_REFRESH_MS = 60000;
+
+const METHOD_LABELS = {
+  cash: "Cash",
+  gcash: "GCash",
+  maya: "Maya",
+  card: "Card",
+  bank_transfer: "Bank transfer",
+  philhealth: "PhilHealth",
+  hmo: "HMO",
+  other: "Other",
+};
 
 function formatTime(str) {
   if (!str) return "-";
@@ -10,6 +24,13 @@ function formatTime(str) {
   const date = new Date();
   date.setHours(hour, minute, 0, 0);
   return date.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" });
+}
+
+// Payment time on the clinic's clock (Asia/Manila), e.g. "Oct 1, 09:14 AM".
+function formatPaidAt(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("en-PH", { timeZone: CLINIC_TZ, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function formatMoney(value) {
@@ -41,12 +62,14 @@ function avatarGrad(id) {
   return AVATAR_POOL[(id || 0) % AVATAR_POOL.length];
 }
 
+// A card with an action is a button; one without is plain content (so it isn't
+// a focusable control that does nothing).
 function StatCard({ label, value, sub, accent, icon, onClick }) {
   const [hover, setHover] = useState(false);
+  const Tag = onClick ? "button" : "div";
   return (
-    <button
-      type="button"
-      onClick={onClick}
+    <Tag
+      {...(onClick ? { type: "button", onClick } : {})}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
@@ -73,7 +96,7 @@ function StatCard({ label, value, sub, accent, icon, onClick }) {
         <div style={{ fontSize: 28, fontWeight: 900, color: "#0f2744", lineHeight: 1 }}>{value}</div>
         {sub && <div style={{ fontSize: 12, color: "#7a8797", marginTop: 6 }}>{sub}</div>}
       </div>
-    </button>
+    </Tag>
   );
 }
 
@@ -83,17 +106,17 @@ export default function CashierDashboard() {
   const [todayCount, setTodayCount] = useState(0);
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
 
   const today = todayISO();
 
   // Counts come from the server over all appointments. "Pending payment" is a
   // FOR_BILLING visit (consultation done, not paid); paying flips it to
-  // COMPLETED. (Previously this read the first 100 appointments / bills and
-  // counted COMPLETED visits whose bill wasn't in those 100 as unpaid.)
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  // COMPLETED. A failed refresh keeps the figures already on screen (flagged
+  // as possibly out of date); a failed first load shows an error, not zeros.
+  const load = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     try {
       const [unpaid, todayList, dashboardData] = await Promise.all([
         fetchAllPages("/appointments", { status: "FOR_BILLING" }),
@@ -104,15 +127,23 @@ export default function CashierDashboard() {
       setForBilling(unpaid);
       setTodayCount(Number(todayList.total) || 0);
       setDashboard(dashboardData.data || null);
+      setLoaded(true);
+      setError("");
     } catch (err) {
-      setError(err.message);
+      setError(describeLoadError(err, "Couldn't load the cashier dashboard."));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [today]);
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  // Payments and newly finished consultations keep coming in: refresh quietly.
+  useEffect(() => {
+    const id = window.setInterval(() => load({ silent: true }), AUTO_REFRESH_MS);
+    return () => window.clearInterval(id);
   }, [load]);
 
   const readyForPayment = useMemo(() => {
@@ -125,7 +156,10 @@ export default function CashierDashboard() {
     return readyForPayment.filter((item) => String(item.date || "").slice(0, 10) === today);
   }, [readyForPayment, today]);
 
+  const olderUnpaidCount = readyForPayment.length - todayReadyForPayment.length;
   const recentPaid = dashboard?.recent || [];
+  const failed = !loaded && Boolean(error) && !loading;
+  const cardValue = (value) => (loading && !loaded ? "..." : failed ? "–" : value);
 
   const now = new Date().toLocaleString("en-PH", {
     weekday: "long",
@@ -140,14 +174,14 @@ export default function CashierDashboard() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 16, marginBottom: 24 }}>
         <StatCard
           label="Today's Appointments"
-          value={loading ? "..." : todayCount}
-          sub="Scheduled today"
+          value={cardValue(todayCount)}
+          sub="Booked for today, every status"
           accent="#163a6b"
           icon={<IconCalendar color="#163a6b" />}
         />
         <StatCard
           label="Pending Payment"
-          value={loading ? "..." : readyForPayment.length}
+          value={cardValue(readyForPayment.length)}
           sub="Consultation done, unpaid"
           accent="#a56a00"
           icon={<IconClock color="#a56a00" />}
@@ -155,75 +189,91 @@ export default function CashierDashboard() {
         />
         <StatCard
           label="Today Revenue"
-          value={loading ? "..." : formatMoney(dashboard?.stats?.today_revenue)}
+          value={cardValue(formatMoney(dashboard?.stats?.today_revenue))}
           sub="Paid today"
           accent="#1f7a52"
           icon={<IconCheck color="#1f7a52" />}
-          onClick={() => navigate("/cashier/billing")}
+          onClick={() => navigate(`/cashier/transactions?from=${today}&to=${today}`)}
         />
         <StatCard
           label="Voided"
-          value={loading ? "..." : dashboard?.stats?.voided_count || 0}
+          value={cardValue(dashboard?.stats?.voided_count || 0)}
           sub="All voided transactions"
           accent="#b94949"
           icon={<IconX color="#b94949" />}
-          onClick={() => navigate("/cashier/transactions")}
+          onClick={() => navigate("/cashier/transactions?status=voided")}
         />
       </div>
 
       {error && (
-        <div style={{ marginBottom: 14, padding: "10px 14px", background: "#fff0f0", border: "1px solid #fcc", borderRadius: 8, fontSize: 13, color: "#c0392b", fontWeight: 700 }}>
-          {error}
+        <div role="alert" style={{ marginBottom: 14, padding: "10px 14px", background: loaded ? "#fff7df" : "#fff0f0", border: `1px solid ${loaded ? "#f0d58f" : "#fcc"}`, borderRadius: 8, fontSize: 13, color: loaded ? "#8a5a00" : "#c0392b", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <span>{loaded ? `Couldn't refresh, so these figures may be out of date. ${error}` : `Couldn't load the dashboard. ${error}`}</span>
+          <button type="button" onClick={() => load()} style={smallButtonStyle}>Try Again</button>
         </div>
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
         <PanelLike
-          title="Ready for Payment"
-          subtitle="Completed consultations awaiting cashier"
+          title="Ready for Payment Today"
+          subtitle="Today's completed consultations awaiting cashier"
           right={<button type="button" onClick={() => navigate("/cashier/billing")} style={smallButtonStyle}>Open Billing</button>}
         >
-          {loading ? (
+          {loading && !loaded ? (
             <SpinnerBlock />
-          ) : todayReadyForPayment.length === 0 ? (
-            <EmptyPanel title="No pending payments today" detail="Completed doctor visits will appear here before payment." />
+          ) : failed ? (
+            <EmptyPanel title="Couldn't load unpaid visits" detail="Use Try Again above." />
           ) : (
-            todayReadyForPayment.map((item, index) => (
-              <PatientRow
-                key={item.id}
-                item={item}
-                border={index < todayReadyForPayment.length - 1}
-                right={
-                  <div style={{ display: "grid", gap: 5, justifyItems: "end" }}>
-                    {getRequestedServices(item) && <span style={{ ...pillStyle, background: "#eef3fb", color: "#163a6b" }}>With request</span>}
-                    <span style={pillStyle}>Unpaid</span>
-                  </div>
-                }
-              />
-            ))
+            <>
+              {olderUnpaidCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => navigate("/cashier/billing")}
+                  style={{ width: "100%", textAlign: "left", border: "none", borderBottom: "1px solid #f0e2bd", background: "#fff9ea", color: "#8a5a00", padding: "12px 22px", fontSize: 13, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}
+                >
+                  {olderUnpaidCount} unpaid visit{olderUnpaidCount === 1 ? "" : "s"} from earlier days — open Billing to collect
+                </button>
+              )}
+              {todayReadyForPayment.length === 0 ? (
+                <EmptyPanel
+                  title="No unpaid visits from today"
+                  detail={olderUnpaidCount > 0 ? "Earlier unpaid visits are listed in Billing." : "Completed doctor visits will appear here before payment."}
+                />
+              ) : (
+                todayReadyForPayment.map((item, index) => (
+                  <PatientRow
+                    key={item.id}
+                    item={item}
+                    border={index < todayReadyForPayment.length - 1}
+                    right={
+                      <div style={{ display: "grid", gap: 5, justifyItems: "end" }}>
+                        {getRequestedServices(item) && <span style={{ ...pillStyle, background: "#eef3fb", color: "#163a6b" }}>With request</span>}
+                        <span style={pillStyle}>Unpaid</span>
+                      </div>
+                    }
+                  />
+                ))
+              )}
+            </>
           )}
         </PanelLike>
 
         <PanelLike
           title="Recent Paid Transactions"
           subtitle="Latest posted payments"
-          right={<span style={{ ...pillStyle, color: "#163a6b", background: "#eef3fb" }}>{recentPaid.length} shown</span>}
+          right={<span style={{ ...pillStyle, color: "#163a6b", background: "#eef3fb" }}>{failed ? "–" : `${recentPaid.length} shown`}</span>}
         >
-          {loading ? (
+          {loading && !loaded ? (
             <SpinnerBlock />
+          ) : failed ? (
+            <EmptyPanel title="Couldn't load recent payments" detail="Use Try Again above." />
           ) : recentPaid.length === 0 ? (
             <EmptyPanel title="No paid transactions yet" detail="Payments will show here after processing." />
           ) : (
             recentPaid.map((bill, index) => (
               <PatientRow
                 key={bill.id || bill.or_number}
-                item={{
-                  id: bill.id,
-                  patient_id: bill.patient_id,
-                  patient_name: bill.patient_name,
-                  doctor_name: bill.or_number,
-                  time: bill.appointment_time,
-                }}
+                item={{ id: bill.id, patient_id: bill.patient_id, patient_name: bill.patient_name }}
+                detail={[bill.or_number, METHOD_LABELS[bill.payment_method] || bill.payment_method, formatPaidAt(bill.paid_at)].filter(Boolean).join(" · ")}
                 border={index < recentPaid.length - 1}
                 right={<strong style={{ fontSize: 12, color: "#0f2744" }}>{formatMoney(bill.total_amount)}</strong>}
               />
@@ -235,7 +285,7 @@ export default function CashierDashboard() {
       <div style={{ marginTop: 18, background: "#fff", border: "1px solid #e4ecf5", borderRadius: 14, padding: "18px 20px", boxShadow: "0 2px 8px rgba(15,23,42,.05)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 14, fontWeight: 900, color: "#0f2744", marginRight: 4 }}>Quick Actions</div>
         <button type="button" onClick={() => navigate("/cashier/billing")} style={primaryButtonStyle}>Open Billing</button>
-        <button type="button" onClick={load} style={secondaryButtonStyle}>Refresh</button>
+        <button type="button" onClick={() => load()} disabled={loading} style={secondaryButtonStyle}>{loading ? "Refreshing..." : "Refresh"}</button>
       </div>
     </MainLayout>
   );
@@ -256,7 +306,9 @@ function PanelLike({ title, subtitle, right, children }) {
   );
 }
 
-function PatientRow({ item, right, border }) {
+// `detail` replaces the default "doctor - time" line (e.g. a payment's OR,
+// method and paid time).
+function PatientRow({ item, right, border, detail }) {
   const [g1, g2] = avatarGrad(item.patient_id || item.id);
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 22px", borderBottom: border ? "1px solid #f0f5fb" : "none" }}>
@@ -266,7 +318,7 @@ function PatientRow({ item, right, border }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, color: "#0f2744", fontSize: 13 }}>{item.patient_name || "Patient"}</div>
         <div style={{ fontSize: 11, color: "#8a97a8", marginTop: 2 }}>
-          {item.doctor_name || "Doctor"} {item.time ? `- ${formatTime(item.time)}` : ""}
+          {detail || `${item.doctor_name || "Doctor"} ${item.time ? `- ${formatTime(item.time)}` : ""}`}
         </div>
         {getRequestedServices(item) && (
           <div style={{ fontSize: 11, color: "#163a6b", marginTop: 4, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>

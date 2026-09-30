@@ -19,6 +19,16 @@ export function buildQuery(params = {}) {
   return text ? `?${text}` : "";
 }
 
+// A user-facing reason for a failed request: the server's own message, or a
+// plain sentence instead of the browser's "Failed to fetch" when the server
+// can't be reached at all.
+export function describeLoadError(err, fallback = "Something went wrong. Please try again.") {
+  if (err instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(String(err?.message || ""))) {
+    return "Can't reach the server. Check the connection and try again.";
+  }
+  return err?.message || fallback;
+}
+
 export async function fetchJson(path) {
   const response = await authFetch(path);
   const payload = await response.json().catch(() => ({}));
