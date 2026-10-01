@@ -39,7 +39,7 @@ const REPORT_LINKS = [
     accent: "#163a6b",
   },
   {
-    title: "Medical Records Report",
+    title: "Consultation Records Report",
     text: "Open read-only doctor-authored consultation records report.",
     path: "/admin/reports/medical-records",
     accent: "#1f7a52",

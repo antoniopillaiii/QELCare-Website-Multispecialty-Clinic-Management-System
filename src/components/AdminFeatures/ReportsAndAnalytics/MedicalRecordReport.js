@@ -91,7 +91,7 @@ function buildPrintableReport(records, metrics, diagnosisRows) {
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>QELCare Medical Records Report</title>
+  <title>QELCare Consultation Records Report</title>
   <style>
     body { font-family: Arial, sans-serif; color: #172033; margin: 36px; }
     h1 { color: #0f2744; margin: 0 0 6px; }
@@ -108,7 +108,7 @@ function buildPrintableReport(records, metrics, diagnosisRows) {
   </style>
 </head>
 <body>
-  <h1>QELCare Medical Records Report</h1>
+  <h1>QELCare Consultation Records Report</h1>
   <div class="muted">Doctor-authored consultation records only. Patient-uploaded medical result tracking is separate.</div>
   <div class="grid">
     <div class="card"><div class="label">Total Records</div><div class="value">${metrics.total}</div></div>
@@ -179,7 +179,7 @@ export default function MedicalRecordReport() {
       setPages(Number(list.pages) || 1);
       setSummary(totals.data || null);
     } catch (err) {
-      if (requestId === requestRef.current) setError(err.message || "Failed to load medical records.");
+      if (requestId === requestRef.current) setError(err.message || "Failed to load consultation records.");
     } finally {
       if (requestId === requestRef.current) setLoading(false);
     }
@@ -207,7 +207,7 @@ export default function MedicalRecordReport() {
     setExporting(true);
     setError("");
     try {
-      downloadTextFile("qelcare-medical-records-report.csv", buildCsv(await loadAllRecords()), "text/csv;charset=utf-8");
+      downloadTextFile("qelcare-consultation-records-report.csv", buildCsv(await loadAllRecords()), "text/csv;charset=utf-8");
     } catch (err) {
       setError(`Couldn't prepare the CSV: ${err.message || "please try again."}`);
     } finally {
@@ -244,7 +244,7 @@ export default function MedicalRecordReport() {
           {"<- Back"}
         </button>
         <div>
-          <h1 style={styles.title}>Medical Records Report</h1>
+          <h1 style={styles.title}>Consultation Records Report</h1>
           <p style={styles.subtitle}>Live doctor-authored consultation records. Patient-uploaded tracking files are separate.</p>
         </div>
       </header>
@@ -325,7 +325,7 @@ export default function MedicalRecordReport() {
           {loading ? (
             <div style={styles.empty}>Loading records...</div>
           ) : records.length === 0 ? (
-            <div style={styles.empty}>No medical records found.</div>
+            <div style={styles.empty}>No consultation records found.</div>
           ) : (
             <div style={styles.tableWrap}>
               <table style={styles.table}>

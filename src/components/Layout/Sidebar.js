@@ -29,7 +29,7 @@ const NAV_BY_ROLE = {
     { id: "appointments", label: "Appointments", icon: Icons.appointments, path: "/admin/appointments" },
     { id: "inquiries", label: "Inquiries", icon: Icons.inquiries, path: "/admin/inquiries" },
     { id: "queue", label: "Queue", icon: Icons.queue, path: "/admin/queue" },
-    { id: "records", label: "Medical Records", icon: Icons.records, path: "/admin/records" },
+    { id: "records", label: "Consultation Records", icon: Icons.records, path: "/admin/records" },
     { id: "billing", label: "Billing", icon: Icons.billing, path: "/admin/billing" },
     { id: "reports", label: "AI Reports & Analytics", icon: Icons.reports, path: "/admin/reports" },
     { id: "logs", label: "Activity Logs", icon: Icons.logs, path: "/admin/logs" },

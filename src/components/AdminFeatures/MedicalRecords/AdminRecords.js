@@ -147,7 +147,7 @@ function RecordViewModal({ record, onClose }) {
       <div style={{ width: "min(980px,100%)", maxHeight: "90vh", overflow: "hidden", background: "#fff", borderRadius: 16, boxShadow: "0 24px 70px rgba(15,23,42,.28)" }}>
         <div style={{ padding: "18px 22px", background: C.blue, color: "#fff", display: "flex", justifyContent: "space-between", gap: 12 }}>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 900 }}>Medical Record #{recordId(record)}</div>
+            <div style={{ fontSize: 18, fontWeight: 900 }}>Consultation Record #{recordId(record)}</div>
             <div style={{ fontSize: 12, opacity: 0.78, marginTop: 3 }}>{record.patient_name || "Unknown patient"} / {formatDate(record.visit_date)}</div>
           </div>
           <button onClick={onClose} aria-label="Close" style={{ width: 34, height: 34, border: "none", borderRadius: 8, background: "rgba(255,255,255,.12)", color: "#fff", cursor: "pointer", display: "grid", placeItems: "center" }}><X size={18} /></button>
@@ -308,7 +308,7 @@ function RecordFormModal({ record, patients, doctors, appointments, saving, onCl
       <div style={{ width: "min(980px,100%)", maxHeight: "90vh", overflow: "hidden", background: "#fff", borderRadius: 16, boxShadow: "0 24px 70px rgba(15,23,42,.28)" }}>
         <div style={{ padding: "18px 22px", background: C.blue, color: "#fff", display: "flex", justifyContent: "space-between", gap: 12 }}>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 900 }}>{isEdit ? `Edit Medical Record #${recordId(record)}` : "Create Medical Record"}</div>
+            <div style={{ fontSize: 18, fontWeight: 900 }}>{isEdit ? `Edit Consultation Record #${recordId(record)}` : "Create Consultation Record"}</div>
             <div style={{ fontSize: 12, opacity: 0.78, marginTop: 3 }}>Doctor-authored clinical documentation</div>
           </div>
           <button onClick={onClose} aria-label="Close" style={{ width: 34, height: 34, border: "none", borderRadius: 8, background: "rgba(255,255,255,.12)", color: "#fff", cursor: "pointer", display: "grid", placeItems: "center" }}><X size={18} /></button>
@@ -473,7 +473,7 @@ export default function AdminRecords() {
       setTotal(Number(payload.total) || 0);
       setPages(Number(payload.pages) || 1);
     } catch (err) {
-      if (requestId === requestRef.current) showAlert("err", err.message || "Failed to load medical records");
+      if (requestId === requestRef.current) showAlert("err", err.message || "Failed to load consultation records");
     } finally {
       if (requestId === requestRef.current) setLoading(false);
     }
@@ -527,17 +527,17 @@ export default function AdminRecords() {
       ));
       if (response.data || response.record) refresh();
       setModal(null);
-      showAlert("ok", isEdit ? "Medical record updated successfully" : "Medical record created successfully");
+      showAlert("ok", isEdit ? "Consultation record updated successfully" : "Consultation record created successfully");
     } catch (err) {
       console.error("Medical record save error:", err);
-      showAlert("err", err.message || "Failed to save medical record");
+      showAlert("err", err.message || "Failed to save consultation record");
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <MainLayout pageTitle="Medical Records" pageSubtitle="Doctor-authored patient clinical records">
+    <MainLayout pageTitle="Consultation Records" pageSubtitle="Doctor-authored patient clinical records">
       {alert && (
         <div style={{
           position: "fixed",
@@ -563,10 +563,10 @@ export default function AdminRecords() {
         </div>
         <div style={{ display: "flex", gap: 10 }}>
           <ExportMenu
-            filename="qelcare-medical-records"
-            title="QELCare Medical Records"
+            filename="qelcare-consultation-records"
+            title="QELCare Consultation Records"
             subtitle={`${total} record${total === 1 ? "" : "s"} ${isFiltered ? "matching the current filters" : "in total"}`}
-            sheetTitle="Medical Records"
+            sheetTitle="Consultation Records"
             columns={EXPORT_COLUMNS}
             rows={records}
             rowCount={total}
@@ -605,8 +605,8 @@ export default function AdminRecords() {
           </div>
           <div style={{ color: C.text, fontSize: 12, fontWeight: 800 }}>
             {isFiltered
-              ? `${total} of ${stats.total} medical record${stats.total === 1 ? "" : "s"} match your filters`
-              : `${total} medical record${total === 1 ? "" : "s"}`}
+              ? `${total} of ${stats.total} consultation record${stats.total === 1 ? "" : "s"} match your filters`
+              : `${total} consultation record${total === 1 ? "" : "s"}`}
           </div>
         </div>
 
@@ -626,11 +626,11 @@ export default function AdminRecords() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} style={{ padding: 36, textAlign: "center", color: C.text, fontWeight: 800 }}>Loading medical records...</td></tr>
+                <tr><td colSpan={8} style={{ padding: 36, textAlign: "center", color: C.text, fontWeight: 800 }}>Loading consultation records...</td></tr>
               ) : records.length === 0 ? (
                 <tr>
                   <td colSpan={8} style={{ padding: 42, textAlign: "center" }}>
-                    <div style={{ color: C.navy, fontSize: 16, fontWeight: 900 }}>No medical records found</div>
+                    <div style={{ color: C.navy, fontSize: 16, fontWeight: 900 }}>No consultation records found</div>
                     <div style={{ color: C.text, fontSize: 13, marginTop: 5 }}>Create records after a patient visit or completed appointment.</div>
                   </td>
                 </tr>

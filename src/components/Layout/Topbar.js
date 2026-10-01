@@ -50,7 +50,7 @@ const PAGE_TITLES = {
   "/frontdesk/patients": { title: "Patient Management", sub: "Patient records and info" },
   "/admin/appointments": { title: "Appointment Management", sub: "Manage clinic appointment schedules" },
   "/admin/queue": { title: "Queue Management", sub: "Live clinic queue by specialty" },
-  "/admin/records": { title: "Medical Records", sub: "Patient documents and history" },
+  "/admin/records": { title: "Consultation Records", sub: "Patient documents and history" },
   "/admin/reports": { title: "AI Reports & Analytics", sub: "System analytics and reports" },
   "/admin/logs": { title: "Activity Logs", sub: "Recent administrative activity" },
   "/admin/profile": { title: "Profile Settings", sub: "Your account preferences" },
