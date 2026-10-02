@@ -66,7 +66,7 @@ export default function PatientIdleTimeout() {
     const onStorage = (e) => {
       if (e.key !== null && e.key !== "token") return;
       if (!getToken() && !PUBLIC_PATHS.includes(window.location.pathname)) {
-        window.location.href = "/login";
+        window.location.replace("/login");
       }
     };
 

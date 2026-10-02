@@ -444,7 +444,9 @@ export default function LoginScreen() {
       }
       saveLoginData(data.token, data.user);
       setSuccess("Signed in successfully! Redirecting...");
-      setTimeout(() => navigate(ROLE_REDIRECT[data.user.role] || "/dashboard"), 800);
+      // replace: the dashboard takes the Sign in page's place in the browser
+      // history, so Back doesn't return to a sign-in form while signed in.
+      setTimeout(() => navigate(ROLE_REDIRECT[data.user.role] || "/dashboard", { replace: true }), 800);
     } catch {
       setError("Cannot connect to server. Please try again.");
       setErrorType("error");

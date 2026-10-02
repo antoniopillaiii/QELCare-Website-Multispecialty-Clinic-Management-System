@@ -46,7 +46,8 @@ export const expireSession = async () => {
   }
   localStorage.clear();
   sessionStorage.setItem(SESSION_EXPIRED_KEY, "1"); // survives localStorage.clear()
-  window.location.href = "/login";
+  // replace: the signed-in page doesn't stay in history as a Back target.
+  window.location.replace("/login");
 };
 
 // LoginScreen calls this once on mount: returns true if the previous logout was an
@@ -71,7 +72,8 @@ export const logout = async () => {
     console.error("Logout error:", err);
   } finally {
     localStorage.clear();
-    window.location.href = "/login";
+    // replace: the signed-in page doesn't stay in history as a Back target.
+    window.location.replace("/login");
   }
 };
 
@@ -112,7 +114,7 @@ export const authFetch = async (url, options = {}) => {
 
   if (response.status === 401 && !noAuthRedirect) {
     localStorage.clear();
-    window.location.href = "/login";
+    window.location.replace("/login");
     return;
   }
 

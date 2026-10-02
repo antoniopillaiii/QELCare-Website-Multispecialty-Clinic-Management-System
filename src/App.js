@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import LoginScreen from "./components/Login/LoginScreen";
@@ -61,20 +61,37 @@ function ProtectedRoute({ children, allowedRoles }) {
   return children;
 }
 
+// Each role's home page after signing in.
+const ROLE_HOME = {
+  Admin: "/admin/dashboard",
+  Doctor: "/doctor/dashboard",
+  Nurse: "/nurse-station",
+  Cashier: "/cashier/dashboard",
+  Patient: "/dashboard",
+  Frontdesk: "/frontdesk/dashboard",
+};
+
 function RoleRedirect() {
-  const role = getUserRole();
-  const redirectMap = {
-    Admin: "/admin/dashboard",
-    Doctor: "/doctor/dashboard",
-    Nurse: "/nurse-station",
-    Cashier: "/cashier/dashboard",
-    Patient: "/dashboard",
-    Frontdesk: "/frontdesk/dashboard",
-  };
-  return <Navigate to={redirectMap[role] || "/login"} replace />;
+  return <Navigate to={ROLE_HOME[getUserRole()] || "/login"} replace />;
+}
+
+// Sign in, sign up and password reset only make sense while signed out. A
+// signed-in user who lands on one - with the browser's Back or Forward, a
+// bookmark or a typed address - goes to their home page instead of seeing a
+// sign-in form while still signed in. (Only for a known role, so a damaged
+// stored role can't bounce between here and RoleRedirect.)
+function SignedOutRoute({ children }) {
+  const home = isAuthenticated() ? ROLE_HOME[getUserRole()] : null;
+  if (home) return <Navigate to={home} replace />;
+  return children;
 }
 
 const guard = (roles, element) => <ProtectedRoute allowedRoles={roles}>{element}</ProtectedRoute>;
+const signedOut = (element) => <SignedOutRoute>{element}</SignedOutRoute>;
+
+// The pages wrapped in signedOut(), and every page that needs no sign-in.
+const SIGNED_OUT_PATHS = ["/login", "/forgot-password", "/verify-email", "/register"];
+const PUBLIC_PATHS = [...SIGNED_OUT_PATHS, "/", "/redirect", "/unauthorized", "/lobby/live-queue-display"];
 
 function Unauthorized() {
   return (
@@ -87,16 +104,34 @@ function Unauthorized() {
 }
 
 export default function App() {
+  // A page brought back from the browser's back/forward cache shows the
+  // screen it had when it was left, without running the route guards. If the
+  // user signed in or out since (in this tab or another), that screen no
+  // longer fits - an in-app page while signed out, or Sign in while signed
+  // in - so load it again and let the guards decide.
+  useEffect(() => {
+    const onPageShow = (event) => {
+      if (!event.persisted) return;
+      const path = window.location.pathname;
+      const signedIn = isAuthenticated();
+      if ((!signedIn && !PUBLIC_PATHS.includes(path)) || (signedIn && SIGNED_OUT_PATHS.includes(path))) {
+        window.location.reload();
+      }
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
+
   return (
     <BrowserRouter>
       {/* Patient-only inactivity auto-logout. No-op for all other roles. */}
       <PatientIdleTimeout />
       <Routes>
         <Route path="/" element={<LandingPage />} />
-        <Route path="/login" element={<LoginScreen />} />
-        <Route path="/forgot-password" element={<ForgotPassScreen />} />
-        <Route path="/verify-email" element={<EmailVerification />} />
-        <Route path="/register" element={<RegisterScreen />} />
+        <Route path="/login" element={signedOut(<LoginScreen />)} />
+        <Route path="/forgot-password" element={signedOut(<ForgotPassScreen />)} />
+        <Route path="/verify-email" element={signedOut(<EmailVerification />)} />
+        <Route path="/register" element={signedOut(<RegisterScreen />)} />
         <Route path="/redirect" element={<RoleRedirect />} />
         <Route path="/unauthorized" element={<Unauthorized />} />
         <Route path="/lobby/live-queue-display" element={<QueueDisplayScreen />} />
