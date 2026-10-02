@@ -3,34 +3,66 @@ const cloudinary = require("../../../config/cloudinary");
 const gemini = require("../../../shared/utils/geminiClient");
 const Patient = require("../../patient/models/Patient");
 const PatientResult = require("../models/PatientResult");
+const { isValidDateString } = require("../../../shared/utils/manilaTime");
+const { logSafeError } = require("../../../shared/utils/safeErrorLog");
 
 function patientName(patient) {
   return patient?.display_name || patient?.name || [patient?.first_name, patient?.last_name].filter(Boolean).join(" ") || "Patient";
 }
 
+function appError(statusCode, message) {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  return err;
+}
+
+// Only messages written here reach the patient. Anything unexpected (a
+// database or storage error) is logged without row contents and answered with
+// a fixed sentence, so SQL details never show up on screen.
+function sendError(res, err, context, fallbackMessage) {
+  if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
+  logSafeError(context, err);
+  return res.status(500).json({ success: false, message: fallbackMessage });
+}
+
 async function getMyPatient(req) {
   const patient = await Patient.findByUserId(req.user.user_id);
-  if (!patient) {
-    const err = new Error("Patient profile not found.");
-    err.statusCode = 404;
-    throw err;
-  }
+  if (!patient) throw appError(404, "Patient profile not found.");
   return patient;
+}
+
+// Column sizes of patient_medical_results.
+const TEXT_LIMITS = { title: 200, result_type: 100, source_facility: 200 };
+const FIELD_LABELS = { title: "Title", result_type: "Document type", source_facility: "Source facility" };
+
+// Bad input is a 400 with the reason instead of a database error.
+function checkDocumentFields(body = {}) {
+  if (!String(body.title || "").trim()) throw appError(400, "Title is required.");
+  for (const [key, max] of Object.entries(TEXT_LIMITS)) {
+    if (String(body[key] ?? "").trim().length > max) {
+      throw appError(400, `${FIELD_LABELS[key]} must be ${max} characters or fewer.`);
+    }
+  }
+  const date = String(body.result_date ?? "").trim();
+  if (date && !isValidDateString(date)) throw appError(400, "Enter a valid document date.");
 }
 
 function uploadToCloudinary(file) {
   if (!file) return Promise.resolve({});
 
   return new Promise((resolve, reject) => {
+    // No file name in the stored id: Cloudinary assigns a long random one, so
+    // a medical document's link can't be guessed from a short suffix.
     const upload = cloudinary.uploader.upload_stream(
       {
         folder: "qelcare-patient-results",
         resource_type: "auto",
-        use_filename: true,
-        unique_filename: true,
       },
       (error, result) => {
-        if (error) return reject(error);
+        if (error || !result?.secure_url) {
+          logSafeError("Patient document storage error", error || new Error("Storage returned no link"));
+          return reject(appError(502, "The file couldn't be stored right now. Please try again."));
+        }
         resolve({
           file_url: result.secure_url,
           file_public_id: result.public_id,
@@ -41,6 +73,21 @@ function uploadToCloudinary(file) {
 
     Readable.from(file.buffer).pipe(upload);
   });
+}
+
+// Remove a stored file. Cloudinary only finds a file under the resource type
+// it filed it as, which is part of the link ("/image/upload/", "/raw/upload/");
+// with "auto" uploads a PDF is filed as an image. Best-effort: a storage
+// failure never fails the request, it is only logged.
+function removeFromCloudinary(fileUrl, publicId) {
+  if (!publicId) return;
+  const fromLink = String(fileUrl || "").match(/\/(image|raw|video)\/upload\//);
+  cloudinary.uploader
+    .destroy(publicId, { resource_type: fromLink ? fromLink[1] : "image", invalidate: true })
+    .then((result) => {
+      if (result?.result !== "ok") console.error(`Patient document storage delete: ${result?.result || "no result"}`);
+    })
+    .catch((err) => logSafeError("Patient document storage delete error", err));
 }
 
 const EXTRACTION_PROMPT =
@@ -85,45 +132,40 @@ const patientResultController = {
       const results = await PatientResult.findByPatient(patient.id, { search: req.query.search || "" });
       res.json({ success: true, patient: { id: patient.id, name: patientName(patient) }, data: results, results });
     } catch (err) {
-      const status = err.statusCode || 500;
-      console.error("Patient results getMine error:", err);
-      res.status(status).json({ success: false, message: err.message || "Failed to fetch medical results." });
+      sendError(res, err, "Patient results getMine error", "Failed to fetch medical results.");
     }
   },
 
   async create(req, res) {
     try {
       const patient = await getMyPatient(req);
-      const title = String(req.body.title || "").trim();
-      if (!title) {
-        return res.status(400).json({ success: false, message: "Title is required." });
-      }
+      checkDocumentFields(req.body);
 
       const fileData = await uploadToCloudinary(req.file);
-      const result = await PatientResult.create(patient.id, req.user.user_id, req.body, fileData);
+      let result;
+      try {
+        result = await PatientResult.create(patient.id, req.user.user_id, req.body, fileData);
+      } catch (err) {
+        // The row wasn't saved: don't leave its file behind in storage.
+        removeFromCloudinary(fileData.file_url, fileData.file_public_id);
+        throw err;
+      }
       res.status(201).json({ success: true, message: "Medical result saved.", data: result, result });
     } catch (err) {
-      const status = err.statusCode || 500;
-      console.error("Patient results create error:", err);
-      res.status(status).json({ success: false, message: err.message || "Failed to save medical result." });
+      sendError(res, err, "Patient results create error", "Failed to save medical result.");
     }
   },
 
   async update(req, res) {
     try {
       const patient = await getMyPatient(req);
-      const title = String(req.body.title || "").trim();
-      if (!title) {
-        return res.status(400).json({ success: false, message: "Title is required." });
-      }
+      checkDocumentFields(req.body);
 
       const result = await PatientResult.updateOwned(req.params.id, patient.id, req.body);
       if (!result) return res.status(404).json({ success: false, message: "Medical result not found." });
       res.json({ success: true, message: "Medical result updated.", data: result, result });
     } catch (err) {
-      const status = err.statusCode || 500;
-      console.error("Patient results update error:", err);
-      res.status(status).json({ success: false, message: err.message || "Failed to update medical result." });
+      sendError(res, err, "Patient results update error", "Failed to update medical result.");
     }
   },
 
@@ -134,17 +176,11 @@ const patientResultController = {
       if (!existing) return res.status(404).json({ success: false, message: "Medical result not found." });
 
       const deleted = await PatientResult.softDeleteOwned(req.params.id, patient.id);
-
-      if (existing.file_public_id) {
-        const resourceType = existing.file_mime === "application/pdf" ? "raw" : "image";
-        cloudinary.uploader.destroy(existing.file_public_id, { resource_type: resourceType }).catch(() => null);
-      }
+      removeFromCloudinary(existing.file_url, existing.file_public_id);
 
       res.json({ success: true, message: "Medical result deleted.", data: deleted, result: deleted });
     } catch (err) {
-      const status = err.statusCode || 500;
-      console.error("Patient results delete error:", err);
-      res.status(status).json({ success: false, message: err.message || "Failed to delete medical result." });
+      sendError(res, err, "Patient results delete error", "Failed to delete medical result.");
     }
   },
 

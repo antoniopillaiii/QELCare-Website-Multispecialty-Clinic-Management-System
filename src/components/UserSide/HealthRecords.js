@@ -20,6 +20,12 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 const MAX_PDF_PAGES = 5;
 const ACCEPTED_FILES = ".png,.jpg,.jpeg,.webp,.pdf";
+// Largest file the server stores as a document attachment.
+const MAX_FILE_MB = 12;
+// AI reading works on a reduced copy: a phone photo is often 5-12 MB, more than
+// the reading endpoint accepts, and text stays readable at this size.
+const OCR_MAX_SIDE = 2200;
+const OCR_MAX_BYTES = 2 * 1024 * 1024;
 
 /* ============================ shared helpers ============================ */
 
@@ -49,6 +55,38 @@ async function renderPdfPageToImage(pdf, pageNumber) {
   return canvas.toDataURL("image/png");
 }
 
+function loadImage(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const image = new Image();
+    image.onload = () => { URL.revokeObjectURL(url); resolve(image); };
+    image.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Unreadable image.")); };
+    image.src = url;
+  });
+}
+
+// A large photo as a smaller JPEG for AI reading (see OCR_MAX_SIDE). The file
+// itself is not changed: the saved attachment is always the original. If the
+// image can't be redrawn here, the original is sent as before.
+async function shrinkForReading(blob) {
+  try {
+    const image = await loadImage(blob);
+    const longest = Math.max(image.naturalWidth, image.naturalHeight);
+    if (!longest || (longest <= OCR_MAX_SIDE && blob.size <= OCR_MAX_BYTES)) return blob;
+    const scale = Math.min(1, OCR_MAX_SIDE / longest);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(image.naturalWidth * scale);
+    canvas.height = Math.round(image.naturalHeight * scale);
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#fff"; // JPEG has no transparency
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.85);
+  } catch {
+    return blob;
+  }
+}
+
 async function toBase64(source) {
   if (typeof source === "string" && source.startsWith("data:")) {
     const [header, base64] = source.split(",");
@@ -56,6 +94,8 @@ async function toBase64(source) {
     return { base64, mimeType };
   }
   if (source instanceof Blob || source instanceof File) {
+    const reduced = await shrinkForReading(source);
+    if (typeof reduced === "string") return toBase64(reduced);
     const mimeType = source.type || "image/jpeg";
     const base64 = await new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -75,7 +115,7 @@ async function callVision(endpoint, source) {
     method: "POST",
     body: JSON.stringify({ image: base64, mime_type: mimeType }),
   });
-  const payload = await response.json();
+  const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.success === false) {
     throw new Error(payload.message || "AI processing failed.");
   }
@@ -181,6 +221,11 @@ function DocumentsTab() {
   const [error, setError] = useState(null);
   const [confirm, setConfirm] = useState(null);
   const fileInputRef = useRef(null);
+  const formRef = useRef(null);
+  const flashTimer = useRef(null);
+  const [formFlash, setFormFlash] = useState(false);
+
+  useEffect(() => () => window.clearTimeout(flashTimer.current), []);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -213,6 +258,34 @@ function DocumentsTab() {
   const startNew = () => {
     setSelected(null); setForm(emptyDocForm); setFiles([]); setStatus(null); setError(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  // The "Add Document" button. The entry form is always on the page (beside the
+  // list on a wide screen, below it on a phone), so the button has to show
+  // where it is: leave a document being edited, bring the form into view, move
+  // focus to it and outline it briefly. Details already typed for a new
+  // document are kept - "Clear" is what empties the form.
+  const addDocument = () => {
+    if (selected) startNew();
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    formRef.current?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+    formRef.current?.focus({ preventScroll: true });
+    setFormFlash(true);
+    window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setFormFlash(false), 1400);
+  };
+
+  const chooseFiles = (e) => {
+    const picked = Array.from(e.target.files || []);
+    const tooLarge = picked.find((file) => file.size > MAX_FILE_MB * 1024 * 1024);
+    if (tooLarge) {
+      e.target.value = "";
+      setFiles([]);
+      setError(`"${tooLarge.name}" is too large. Files can be up to ${MAX_FILE_MB} MB.`);
+      return;
+    }
+    setError(null);
+    setFiles(picked);
   };
 
   const selectItem = (item) => {
@@ -275,12 +348,13 @@ function DocumentsTab() {
         if (files[0]) body.append("resultFile", files[0]); // store the first page as the attachment; combined text from all files is in extracted_text
         response = await fetch(`${API_URL}/patient-results`, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {}, body });
       }
-      const payload = await response.json();
+      const payload = await response.json().catch(() => ({}));
       if (!response.ok || payload.success === false) throw new Error(payload.message || "Failed to save document.");
-      setStatus(selected ? "Document updated." : "Document saved.");
       await load();
       const saved = payload.result || payload.data;
       if (saved) selectItem(saved);
+      // After selectItem (it clears messages), so the confirmation stays on screen.
+      setStatus(selected ? "Document updated." : "Document saved.");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -321,7 +395,7 @@ function DocumentsTab() {
               Upload personal copies of lab results, X-rays, prescriptions, and other medical papers. AI Vision reads the text and detects the document type. This is your personal tracker, not an official clinic submission.
             </div>
           </div>
-          <ActionButton onClick={startNew}>Add Document</ActionButton>
+          <ActionButton onClick={addDocument}>Add Document</ActionButton>
         </div>
       </Panel>
 
@@ -336,32 +410,44 @@ function DocumentsTab() {
           <div style={{ height: 12 }} />
           {loading ? (
             <LoadingState label="Loading documents..." />
-          ) : filtered.length === 0 ? (
+          ) : results.length === 0 ? (
             <EmptyState title="No documents yet" detail="Upload a medical paper or enter details manually." />
+          ) : filtered.length === 0 ? (
+            <EmptyState title="No documents match your search" detail="Try a different title, type, facility, or a word from the text." />
           ) : (
             <div style={{ display: "grid", gap: 10 }}>
-              {pageItems.map((item) => (
-                <button
-                  key={item.result_id}
-                  type="button"
-                  onClick={() => selectItem(item)}
-                  style={{
-                    width: "100%", textAlign: "left",
-                    border: `1px solid ${selected?.result_id === item.result_id ? "#163a6b" : "#e3ebf5"}`,
-                    background: selected?.result_id === item.result_id ? "#f3f7ff" : "#fff",
-                    borderRadius: 8, padding: 14, cursor: "pointer", fontFamily: "inherit",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                    <div style={{ minWidth: 0 }}>
+              {pageItems.map((item) => {
+                const isSelected = selected?.result_id === item.result_id;
+                return (
+                  // Open and Delete are two separate buttons side by side (a
+                  // button inside a button is not valid and misbehaves for
+                  // keyboard and screen-reader users).
+                  <div
+                    key={item.result_id}
+                    style={{
+                      display: "flex", alignItems: "flex-start", gap: 12,
+                      border: `1px solid ${isSelected ? "#163a6b" : "#e3ebf5"}`,
+                      background: isSelected ? "#f3f7ff" : "#fff",
+                      borderRadius: 8,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => selectItem(item)}
+                      aria-pressed={isSelected}
+                      style={{
+                        flex: 1, minWidth: 0, textAlign: "left", border: "none", background: "transparent",
+                        borderRadius: 8, padding: 14, cursor: "pointer", fontFamily: "inherit",
+                      }}
+                    >
                       <div style={{ fontSize: 15, fontWeight: 900, color: "#162235", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title}</div>
                       <div style={{ color: "#6b778c", fontSize: 12, marginTop: 4 }}>{item.result_type || "Medical Document"} - {formatDate(item.result_date || item.created_at)}</div>
                       {item.source_facility && <div style={{ color: "#42526a", fontSize: 12, marginTop: 4 }}>{item.source_facility}</div>}
-                    </div>
-                    <ActionButton tone="danger" onClick={(e) => { e.stopPropagation(); remove(item); }}>Delete</ActionButton>
+                    </button>
+                    <ActionButton tone="danger" aria-label={`Delete ${item.title}`} onClick={() => remove(item)} style={{ margin: "14px 14px 14px 0", flexShrink: 0 }}>Delete</ActionButton>
                   </div>
-                </button>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -375,6 +461,18 @@ function DocumentsTab() {
           />
         </Panel>
 
+        <div
+          ref={formRef}
+          tabIndex={-1}
+          role="group"
+          aria-label={selected ? "Edit document" : "Add document"}
+          style={{
+            // scrollMarginTop: stop below the sticky top bar when scrolled to.
+            outline: "none", borderRadius: 8, scrollMarginTop: 84,
+            boxShadow: formFlash ? "0 0 0 3px rgba(22,58,107,.3)" : "0 0 0 0 rgba(22,58,107,0)",
+            transition: "box-shadow .35s ease",
+          }}
+        >
         <Panel style={{ padding: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
             <div style={{ fontSize: 16, fontWeight: 900, color: "#162235" }}>{selected ? "Edit Document" : "Add Document"}</div>
@@ -384,8 +482,12 @@ function DocumentsTab() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
             {!selected && (
               <Field label="Upload file(s)">
-                <input ref={fileInputRef} type="file" multiple accept={ACCEPTED_FILES} onChange={(e) => setFiles(Array.from(e.target.files || []))} style={inputStyle} />
-                {files.length > 0 && <div style={{ fontSize: 11, color: "#6b778c", marginTop: 4 }}>{files.length} file(s) selected — all pages are read together.</div>}
+                <input ref={fileInputRef} type="file" multiple accept={ACCEPTED_FILES} onChange={chooseFiles} style={inputStyle} />
+                {files.length > 0 && (
+                  <div style={{ fontSize: 11, color: "#6b778c", marginTop: 4 }}>
+                    {files.length === 1 ? "1 file selected." : `${files.length} files selected. All are read together; the first one is saved as the attachment.`}
+                  </div>
+                )}
               </Field>
             )}
             {!selected && (
@@ -393,9 +495,9 @@ function DocumentsTab() {
                 <ActionButton disabled={!files.length || ocrBusy} onClick={runOcr}>{ocrBusy ? "Reading..." : "Extract Text"}</ActionButton>
               </Field>
             )}
-            <Field label="Title"><input name="title" value={form.title} onChange={setField} style={inputStyle} placeholder="e.g. CBC Result - May 2026" /></Field>
-            <Field label="Document type"><input name="result_type" value={form.result_type} onChange={setField} style={inputStyle} placeholder="Auto-detected by AI (editable)" /></Field>
-            <Field label="Source facility"><input name="source_facility" value={form.source_facility} onChange={setField} style={inputStyle} placeholder="Clinic, hospital, or lab" /></Field>
+            <Field label="Title"><input name="title" value={form.title} onChange={setField} maxLength={200} style={inputStyle} placeholder="e.g. CBC Result - May 2026" /></Field>
+            <Field label="Document type"><input name="result_type" value={form.result_type} onChange={setField} maxLength={100} style={inputStyle} placeholder="Auto-detected by AI (editable)" /></Field>
+            <Field label="Source facility"><input name="source_facility" value={form.source_facility} onChange={setField} maxLength={200} style={inputStyle} placeholder="Clinic, hospital, or lab" /></Field>
             <Field label="Document date"><input name="result_date" type="date" value={form.result_date} onChange={setField} style={inputStyle} /></Field>
           </div>
 
@@ -411,10 +513,11 @@ function DocumentsTab() {
           )}
 
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
-            <ActionButton tone="secondary" onClick={startNew}>Clear</ActionButton>
+            <ActionButton tone="secondary" onClick={startNew}>{selected ? "Cancel" : "Clear"}</ActionButton>
             <ActionButton disabled={saving || ocrBusy} onClick={save}>{saving ? "Saving..." : selected ? "Save Changes" : "Save Document"}</ActionButton>
           </div>
         </Panel>
+        </div>
       </div>
 
       {confirm && (
