@@ -250,7 +250,7 @@ const styles = `
 
   .ls-patient-box { background: #f8fafd; border: 1.5px solid var(--line); border-radius: 14px; padding: 14px 15px; }
   .ls-patient-lbl { font-size: .68rem; font-weight: 800; color: #9ba8bc; letter-spacing: .09em; text-transform: uppercase; margin-bottom: 10px; text-align: center; }
-  .ls-patient-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .ls-patient-btns { display: grid; grid-template-columns: 1fr; gap: 8px; }
   .ls-patient-btn {
     display: flex; align-items: center; justify-content: center; gap: 6px;
     height: 41px; border-radius: 10px; border: 1.5px solid var(--line);
@@ -282,7 +282,6 @@ const styles = `
   }
   @media (max-width: 430px) {
     .ls-form-panel { padding: 22px 16px 36px; }
-    .ls-patient-btns { grid-template-columns: 1fr; }
     .ls-form-head h2 { font-size: 1.6rem; }
   }
 `;
@@ -454,14 +453,6 @@ export default function LoginScreen() {
   };
 
   const handleKey = (e) => { if (e.key === "Enter") handleLogin(); };
-
-  // "Existing Patient" is a shortcut into the sign-in form above (returning
-  // patients sign in here). Say so, and put the cursor where they type next.
-  const startExistingPatient = () => {
-    clearFeedback();
-    setNotice("Welcome back! Sign in with your username and password.");
-    (username.trim() ? passwordRef : usernameRef).current?.focus();
-  };
 
   const submitInquiry = async () => {
     setInqErr(""); setInqMsg("");
@@ -686,13 +677,10 @@ export default function LoginScreen() {
               </div>
 
               <div className="ls-patient-box">
-                <p className="ls-patient-lbl">New to QELCare or returning patient?</p>
+                <p className="ls-patient-lbl">New to QELCare?</p>
                 <div className="ls-patient-btns">
                   <button className="ls-patient-btn" onClick={() => navigate("/register")}>
-                    <UserPlusIcon />New Patient
-                  </button>
-                  <button className="ls-patient-btn" onClick={startExistingPatient}>
-                    <UserIcon />Existing Patient
+                    <UserPlusIcon />Sign Up
                   </button>
                 </div>
               </div>
