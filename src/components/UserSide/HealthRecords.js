@@ -26,8 +26,29 @@ const MAX_FILE_MB = 12;
 // the reading endpoint accepts, and text stays readable at this size.
 const OCR_MAX_SIDE = 2200;
 const OCR_MAX_BYTES = 2 * 1024 * 1024;
+// The file types both AI readers and the document store take. The picker's
+// `accept` only suggests them ("All files" can still be chosen), so every pick
+// is checked as well.
+const ACCEPTED_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp", "application/pdf"];
+const ACCEPTED_LABEL = "PNG, JPG, WEBP, or PDF";
 
 /* ============================ shared helpers ============================ */
+
+function isAcceptedFile(file) {
+  if (ACCEPTED_TYPES.includes(String(file?.type || "").toLowerCase())) return true;
+  // Some phones report no type at all; then go by the file name.
+  return !file?.type && /\.(png|jpe?g|webp|pdf)$/i.test(file?.name || "");
+}
+
+// Why a set of picked files can't be used, or "" when it can. `maxMb` applies
+// where the file is stored (Documents), not where it is only read.
+function filePickError(files, maxMb = null) {
+  const unsupported = files.find((file) => !isAcceptedFile(file));
+  if (unsupported) return `"${unsupported.name}" can't be used. Choose a ${ACCEPTED_LABEL} file.`;
+  const tooLarge = maxMb ? files.find((file) => file.size > maxMb * 1024 * 1024) : null;
+  if (tooLarge) return `"${tooLarge.name}" is too large. Files can be up to ${maxMb} MB.`;
+  return "";
+}
 
 function fileType(file) {
   if (!file) return "";
@@ -100,7 +121,7 @@ async function toBase64(source) {
     const base64 = await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result.split(",")[1]);
-      reader.onerror = () => reject(new Error("Failed to read file."));
+      reader.onerror = () => reject(new Error(`Couldn't open "${source.name || "the file"}". Choose it again, or use a different file.`));
       reader.readAsDataURL(source);
     });
     return { base64, mimeType };
@@ -124,6 +145,8 @@ async function callVision(endpoint, source) {
 
 // Walk a file (image or multi-page PDF) and call an endpoint per page.
 async function processFileWithVision(file, endpoint, onPage) {
+  const problem = filePickError([file]);
+  if (problem) throw new Error(problem);
   if (fileType(file) === "pdf") {
     const data = await file.arrayBuffer();
     // isEvalSupported:false — never use eval()/Function() for font programs, so
@@ -277,11 +300,12 @@ function DocumentsTab() {
 
   const chooseFiles = (e) => {
     const picked = Array.from(e.target.files || []);
-    const tooLarge = picked.find((file) => file.size > MAX_FILE_MB * 1024 * 1024);
-    if (tooLarge) {
+    const problem = filePickError(picked, MAX_FILE_MB);
+    if (problem) {
       e.target.value = "";
       setFiles([]);
-      setError(`"${tooLarge.name}" is too large. Files can be up to ${MAX_FILE_MB} MB.`);
+      setStatus(null);
+      setError(problem);
       return;
     }
     setError(null);
@@ -328,6 +352,7 @@ function DocumentsTab() {
       }));
       setStatus("Extraction complete. Review and edit the fields before saving.");
     } catch (err) {
+      setStatus(null); // drop "reading..." so it doesn't sit next to the error
       setError(err.message || "Text extraction failed. You can still type the details manually.");
     } finally {
       setOcrBusy(false);
@@ -711,6 +736,20 @@ function MedicationsTab() {
     }
   };
 
+  const choosePrescriptionFiles = (e) => {
+    const picked = Array.from(e.target.files || []);
+    const problem = filePickError(picked);
+    if (problem) {
+      e.target.value = "";
+      setFiles([]);
+      setStatus(null);
+      setError(problem);
+      return;
+    }
+    setError(null);
+    setFiles(picked);
+  };
+
   const runPrescriptionOcr = async () => {
     if (!files.length) { setError("Choose one or more prescription image/PDF files first."); return; }
     setOcrBusy(true); setError(null); setStatus("AI is reading your prescription...");
@@ -724,6 +763,7 @@ function MedicationsTab() {
       }
       setParsed(all);
     } catch (err) {
+      setStatus(null); // drop "reading..." so it doesn't sit next to the error
       setError(err.message || "Could not read the prescription. Add medications manually.");
     } finally {
       setOcrBusy(false);
@@ -804,7 +844,7 @@ function MedicationsTab() {
           <Panel style={{ padding: 16 }}>
             <div style={{ fontSize: 15, fontWeight: 900, color: "#162235", marginBottom: 10 }}>Scan a Prescription (AI)</div>
             <Field label="Prescription image(s) or PDF">
-              <input ref={fileInputRef} type="file" multiple accept={ACCEPTED_FILES} onChange={(e) => setFiles(Array.from(e.target.files || []))} style={inputStyle} />
+              <input ref={fileInputRef} type="file" multiple accept={ACCEPTED_FILES} onChange={choosePrescriptionFiles} style={inputStyle} />
               {files.length > 0 && <div style={{ fontSize: 11, color: "#6b778c", marginTop: 4 }}>{files.length} file(s) selected — front/back or multiple pages will be read together.</div>}
             </Field>
             <div style={{ height: 10 }} />

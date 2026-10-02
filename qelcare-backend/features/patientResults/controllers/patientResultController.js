@@ -5,6 +5,7 @@ const Patient = require("../../patient/models/Patient");
 const PatientResult = require("../models/PatientResult");
 const { isValidDateString } = require("../../../shared/utils/manilaTime");
 const { logSafeError } = require("../../../shared/utils/safeErrorLog");
+const { checkReadableImage } = require("../../../shared/utils/readableImage");
 
 function patientName(patient) {
   return patient?.display_name || patient?.name || [patient?.first_name, patient?.last_name].filter(Boolean).join(" ") || "Patient";
@@ -199,6 +200,9 @@ const patientResultController = {
         return res.status(413).json({ success: false, message: "Image is too large. Max ~10 MB per page." });
       }
 
+      const checked = checkReadableImage(image, mime_type);
+      if (checked.error) return res.status(400).json({ success: false, message: checked.error });
+
       if (!gemini.apiKey()) {
         console.error("OCR error: GEMINI_API_KEY is not set in the server environment.");
         return res.status(503).json({
@@ -207,7 +211,7 @@ const patientResultController = {
         });
       }
 
-      const mimeType = mime_type || "image/jpeg";
+      const mimeType = checked.mimeType;
 
       const geminiResponse = await gemini.generateFromImage({
         model: gemini.ocrModel(),

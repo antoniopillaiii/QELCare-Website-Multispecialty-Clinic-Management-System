@@ -1,6 +1,7 @@
 const Patient = require("../../patient/models/Patient");
 const PatientMedication = require("../models/PatientMedication");
 const gemini = require("../../../shared/utils/geminiClient");
+const { checkReadableImage } = require("../../../shared/utils/readableImage");
 
 async function getMyPatient(req) {
   const patient = await Patient.findByUserId(req.user.user_id);
@@ -169,12 +170,15 @@ const medicationController = {
         return res.status(413).json({ success: false, message: "Image is too large. Max ~10 MB per page." });
       }
 
+      const checked = checkReadableImage(image, mime_type);
+      if (checked.error) return res.status(400).json({ success: false, message: checked.error });
+
       if (!gemini.apiKey()) {
         console.error("Prescription parse error: GEMINI_API_KEY is not set in the server environment.");
         return res.status(503).json({ success: false, message: "Prescription reading isn't available right now. You can still add your medications manually." });
       }
 
-      const mimeType = mime_type || "image/jpeg";
+      const mimeType = checked.mimeType;
 
       const response = await gemini.generateFromImage({
         model: gemini.ocrModel(),
