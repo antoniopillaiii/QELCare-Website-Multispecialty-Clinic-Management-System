@@ -293,10 +293,12 @@ const appointmentController = {
     }
   },
 
-  // Whole-dataset counts for the Appointment Management cards.
+  // Whole-dataset counts for the Appointment Management cards. The per-doctor
+  // breakdown (it names accounts with their status and role) is for the Admin
+  // screen's doctor filter only.
   async getStats(req, res) {
     try {
-      const stats = await Appointment.stats();
+      const stats = await Appointment.stats({ withDoctors: req.user?.role === "Admin" });
       res.json({ success: true, data: stats });
     } catch (err) {
       console.error("Appointment stats error:", err);

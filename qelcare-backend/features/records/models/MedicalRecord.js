@@ -530,6 +530,35 @@ const MedicalRecord = {
     return { ...totals.rows[0], top_diagnoses: diagnoses.rows };
   },
 
+  // Who the list can be filtered by: every patient and every doctor with at
+  // least one record under `filters`, and how many. The patient / doctor
+  // pickers use it so each name shows whether it has records at all - several
+  // patient rows can share one name, and only one of them may hold the records.
+  // A doctor here is the record's effective doctor (the same rule the doctor
+  // filter uses), whatever that account's status or role is now.
+  async filterOptions(filters = {}) {
+    const { params, whereSql } = buildFilters(filters);
+    const [patients, doctors] = await Promise.all([
+      db.query(
+        `SELECT mr.patient_id, COUNT(*)::int AS records
+         ${FILTER_FROM}
+         ${whereSql}
+         GROUP BY mr.patient_id`,
+        params
+      ),
+      db.query(
+        `SELECT d.user_id AS doctor_id, d.first_name, d.last_name, d.username, d.status,
+                dr.role_name AS role, COUNT(*)::int AS records
+         ${FILTER_FROM}
+         LEFT JOIN roles dr ON d.role_id = dr.role_id
+         ${whereSql ? `${whereSql} AND` : "WHERE"} d.user_id IS NOT NULL
+         GROUP BY d.user_id, d.first_name, d.last_name, d.username, d.status, dr.role_name`,
+        params
+      ),
+    ]);
+    return { patients: patients.rows, doctors: doctors.rows };
+  },
+
   async findById(recordId, viewer = null) {
     const params = [recordId];
     const confidential = confidentialityWhere(viewer, params);

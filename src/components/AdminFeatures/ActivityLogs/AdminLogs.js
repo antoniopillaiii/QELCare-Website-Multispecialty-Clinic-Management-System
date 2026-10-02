@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { X } from "lucide-react";
 import MainLayout from "../../Layout/MainLayout";
 import Pagination from "../../common/Pagination";
+import SearchSelect from "../../common/SearchSelect";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C as COLORS } from "../../../utils/adminTheme";
@@ -260,6 +261,22 @@ export default function AdminLogs() {
     setDraftFilters((current) => ({ ...current, [key]: value }));
   }
 
+  // Actor picker: accounts with the same name are told apart by role and
+  // username, next to how many log entries each has.
+  const actorOptions = useMemo(
+    () => (meta.users || [])
+      .filter((user) => user.user_id)
+      .map((user) => ({
+        value: String(user.user_id),
+        label: user.actor_name || user.username,
+        count: Number(user.count) || 0,
+        detail: [user.role_name, user.username ? `@${user.username}` : "", `${user.count} log${user.count === 1 ? "" : "s"}`].filter(Boolean).join(" / "),
+      }))
+      // Same-named accounts: the busier one first (the picker sorts by name).
+      .sort((a, b) => b.count - a.count || Number(a.value) - Number(b.value)),
+    [meta.users]
+  );
+
   function applyFilters(event) {
     event.preventDefault();
     if (draftFilters.from && draftFilters.to && draftFilters.from > draftFilters.to) {
@@ -389,20 +406,18 @@ export default function AdminLogs() {
 
             <div className="al-field">
               <label>Actor</label>
-              <select
+              <SearchSelect
                 value={draftFilters.user_id}
-                onChange={(event) => updateDraft("user_id", event.target.value)}
+                onChange={(value) => updateDraft("user_id", value)}
+                options={actorOptions}
+                allLabel="All users"
+                allValue="ALL"
+                searchPlaceholder="Search users..."
+                emptyText="No users match your search."
+                ariaLabel="Actor"
                 disabled={metaLoading}
-              >
-                <option value="ALL">All users</option>
-                {(meta.users || [])
-                  .filter((user) => user.user_id)
-                  .map((user) => (
-                    <option key={user.user_id} value={user.user_id}>
-                      {user.actor_name || user.username} ({user.count})
-                    </option>
-                  ))}
-              </select>
+                style={{ height: 38, border: "1px solid #dce6f1", padding: "0 11px", color: "#17212b" }}
+              />
             </div>
 
             <div className="al-field">

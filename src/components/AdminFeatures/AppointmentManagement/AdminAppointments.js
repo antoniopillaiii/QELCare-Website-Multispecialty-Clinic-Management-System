@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom";
 import MainLayout from "../../Layout/MainLayout";
 import Pagination from "../../common/Pagination";
+import SearchSelect, { compareLabels } from "../../common/SearchSelect";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { C } from "../../../utils/adminTheme";
@@ -217,8 +218,22 @@ function AppointmentModal({ appointment, patients, doctors, specialties, saving,
   // A doctor belongs to exactly one specialty: choosing a specialty narrows the
   // doctor list, and choosing a doctor sets the specialty to theirs.
   const doctorOptions = useMemo(
-    () => (form.specialty_id ? doctors.filter((d) => String(d.specialty_id) === String(form.specialty_id)) : doctors),
+    () => (form.specialty_id ? doctors.filter((d) => String(d.specialty_id) === String(form.specialty_id)) : [...doctors])
+      .sort((a, b) => compareLabels(doctorName(a), doctorName(b))),
     [doctors, form.specialty_id]
+  );
+
+  // Patients with the same name are told apart by patient number and phone
+  // (lowest number first; the picker sorts by name).
+  const patientOptions = useMemo(
+    () => patients
+      .map((patient) => ({
+        value: String(patient.id),
+        label: patientName(patient),
+        detail: [`#${patient.id}`, patient.phone].filter(Boolean).join(" / "),
+      }))
+      .sort((a, b) => Number(a.value) - Number(b.value)),
+    [patients]
   );
 
   const set = (event) => {
@@ -283,10 +298,17 @@ function AppointmentModal({ appointment, patients, doctors, specialties, saving,
 
           <div style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 }}>
             <Field label="Patient *">
-              <select name="patient_id" value={form.patient_id} onChange={set} disabled={isEdit} style={{ ...inputStyle, opacity: isEdit ? 0.75 : 1 }}>
-                <option value="">Select patient</option>
-                {patients.map((patient) => <option key={patient.id} value={patient.id}>{patientName(patient)} / #{patient.id}</option>)}
-              </select>
+              <SearchSelect
+                value={form.patient_id}
+                onChange={(value) => set({ target: { name: "patient_id", value } })}
+                options={patientOptions}
+                placeholder="Select patient"
+                searchPlaceholder="Search patients..."
+                emptyText="No patients match your search."
+                ariaLabel="Patient"
+                disabled={isEdit}
+                style={{ height: inputStyle.height }}
+              />
             </Field>
             <Field label="Specialty">
               <select name="specialty_id" value={form.specialty_id} onChange={set} disabled={isEdit} style={{ ...inputStyle, opacity: isEdit ? 0.75 : 1 }}>
@@ -442,6 +464,34 @@ export default function AdminAppointments() {
     [statusFilter, dateFilter, doctorFilter, debouncedSearch]
   );
   const hasFilters = statusFilter !== "all" || !!dateFilter || doctorFilter !== "all" || !!debouncedSearch;
+
+  // Doctor filter: the bookable doctors, plus any account that already has
+  // appointments as the doctor (deactivated since, or no longer a doctor), so
+  // every appointment on the list can be reached. Each entry shows how many
+  // appointments it has; the picker sorts by name.
+  const doctorFilterOptions = useMemo(() => {
+    const counted = new Map((stats?.by_doctor || []).map((row) => [Number(row.doctor_id), row]));
+    const listed = new Set(doctors.map((doctor) => Number(doctor.user_id)));
+    const withAppointmentsOnly = [...counted.values()]
+      .filter((row) => !listed.has(Number(row.doctor_id)))
+      .map((row) => ({ ...row, user_id: row.doctor_id }));
+    return [...doctors, ...withAppointmentsOnly]
+      .map((doctor) => {
+        const count = stats?.by_doctor ? counted.get(Number(doctor.user_id))?.appointments || 0 : null;
+        return {
+          value: String(doctor.user_id),
+          label: doctorName(doctor),
+          count,
+          detail: [
+            doctor.specialty_name,
+            count === null ? "" : count === 0 ? "No appointments" : `${count} appointment${count === 1 ? "" : "s"}`,
+            doctor.status === "deactivated" ? "Deactivated" : "",
+            doctor.role && doctor.role !== "Doctor" ? `Now ${doctor.role}` : "",
+          ].filter(Boolean).join(" / "),
+        };
+      })
+      .sort((a, b) => (b.count || 0) - (a.count || 0) || Number(a.value) - Number(b.value));
+  }, [doctors, stats]);
 
   const showAlert = useCallback((type, message) => {
     setAlert({ type, message });
@@ -659,10 +709,16 @@ export default function AdminAppointments() {
               <option value={LOST_FILTER}>Cancelled + No Show</option>
             </select>
             <input type="date" value={dateFilter} onChange={(event) => changeFilter(setDateFilter)(event.target.value)} style={inputStyle} aria-label="Date filter" />
-            <select value={doctorFilter} onChange={(event) => changeFilter(setDoctorFilter)(event.target.value)} style={inputStyle} aria-label="Doctor filter">
-              <option value="all">All Doctors</option>
-              {doctors.map((doctor) => <option key={doctor.user_id} value={doctor.user_id}>{doctorName(doctor)}</option>)}
-            </select>
+            <SearchSelect
+              value={doctorFilter}
+              onChange={changeFilter(setDoctorFilter)}
+              options={doctorFilterOptions}
+              allLabel="All Doctors"
+              searchPlaceholder="Search doctors..."
+              emptyText="No doctors match your search."
+              ariaLabel="Doctor filter"
+              style={{ height: inputStyle.height }}
+            />
             <Button onClick={() => { setSearch(""); setDebouncedSearch(""); setStatusFilter("all"); setDateFilter(""); setDoctorFilter("all"); setPage(1); }}>Clear Filters</Button>
           </div>
           <div style={{ color: C.text, fontSize: 12, fontWeight: 800 }}>

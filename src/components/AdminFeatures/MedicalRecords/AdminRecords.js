@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MainLayout from "../../Layout/MainLayout";
 import Pagination from "../../common/Pagination";
+import SearchSelect, { compareLabels } from "../../common/SearchSelect";
 import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { buildQuery, fetchAllPages } from "../../../utils/paginatedFetch";
@@ -84,6 +85,13 @@ function doctorName(doctor) {
 
 function recordId(record) {
   return record?.record_id || record?.id;
+}
+
+// "25 records" / "No records"; nothing while the counts aren't known.
+function recordCountText(count) {
+  if (count === null || count === undefined) return "";
+  if (count === 0) return "No records";
+  return `${count} record${count === 1 ? "" : "s"}`;
 }
 
 function Field({ label, children, span = 1 }) {
@@ -411,6 +419,8 @@ export default function AdminRecords() {
   const [patients, setPatients] = useState([]);
   const [doctors, setDoctors] = useState([]);
   const [appointments, setAppointments] = useState([]);
+  // How many records each patient / doctor has (null until loaded).
+  const [recordCounts, setRecordCounts] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [alert, setAlert] = useState(null);
@@ -468,6 +478,25 @@ export default function AdminRecords() {
     }
   }, [showAlert]);
 
+  // Record counts per patient and per doctor, shown beside each name in the
+  // filter pickers. They are a guide only: if they can't be loaded the pickers
+  // still work, just without the counts.
+  const loadRecordCounts = useCallback(async () => {
+    try {
+      const payload = await parseApi(await authFetch("/medical-records/filter-options"));
+      const data = payload.data || {};
+      setRecordCounts({
+        patients: new Map((data.patients || []).map((row) => [Number(row.patient_id), Number(row.records) || 0])),
+        doctors: new Map((data.doctors || []).map((row) => [
+          Number(row.doctor_id),
+          { ...row, user_id: row.doctor_id, records: Number(row.records) || 0 },
+        ])),
+      });
+    } catch {
+      setRecordCounts(null);
+    }
+  }, []);
+
   // Only the latest request may update the table (typing / paging quickly
   // must not let an older, slower response overwrite a newer one).
   const requestRef = useRef(0);
@@ -490,7 +519,8 @@ export default function AdminRecords() {
   const refresh = useCallback(() => {
     loadRecords();
     loadSummary();
-  }, [loadRecords, loadSummary]);
+    loadRecordCounts();
+  }, [loadRecordCounts, loadRecords, loadSummary]);
 
   useEffect(() => {
     loadLookups().catch((err) => {
@@ -505,6 +535,60 @@ export default function AdminRecords() {
   useEffect(() => {
     loadSummary();
   }, [loadSummary]);
+
+  useEffect(() => {
+    loadRecordCounts();
+  }, [loadRecordCounts]);
+
+  // Patient picker: every patient (deactivated ones too - their records still
+  // exist). Several patient rows can carry the same name, so each entry shows
+  // its patient number and record count, and among same-named rows the one
+  // that holds the records is listed first. The picker sorts by name.
+  const patientOptions = useMemo(() => {
+    const counts = recordCounts?.patients;
+    return patients
+      .map((patient) => {
+        const records = counts ? counts.get(Number(patient.id)) || 0 : null;
+        return {
+          value: String(patient.id),
+          label: patientName(patient),
+          records,
+          detail: [`#${patient.id}`, recordCountText(records), patient.is_active === false ? "Deactivated" : ""].filter(Boolean).join(" / "),
+        };
+      })
+      .sort((a, b) => (b.records || 0) - (a.records || 0) || Number(a.value) - Number(b.value));
+  }, [patients, recordCounts]);
+
+  // Doctor picker: the active doctors, plus any account that still has records
+  // under its name (a deactivated doctor's records can still be filtered).
+  const doctorOptions = useMemo(() => {
+    const counted = recordCounts?.doctors;
+    const listed = new Set(doctors.map((doctor) => Number(doctor.user_id)));
+    const withRecordsOnly = counted ? [...counted.values()].filter((doctor) => !listed.has(Number(doctor.user_id))) : [];
+    return [...doctors, ...withRecordsOnly]
+      .map((doctor) => {
+        const records = counted ? counted.get(Number(doctor.user_id))?.records || 0 : null;
+        return {
+          value: String(doctor.user_id),
+          label: doctorName(doctor),
+          records,
+          detail: [
+            doctor.specialty_name,
+            recordCountText(records),
+            doctor.status === "deactivated" ? "Deactivated" : "",
+            doctor.role && doctor.role !== "Doctor" ? `Now ${doctor.role}` : "",
+          ].filter(Boolean).join(" / "),
+        };
+      })
+      .sort((a, b) => (b.records || 0) - (a.records || 0) || Number(a.value) - Number(b.value));
+  }, [doctors, recordCounts]);
+
+  // When the chosen patient has no records but another patient row with the
+  // same name does, the empty table points to it.
+  const selectedPatient = patientOptions.find((option) => option.value === String(patientFilter)) || null;
+  const sameNameWithRecords = selectedPatient && selectedPatient.records === 0
+    ? patientOptions.filter((option) => option.value !== selectedPatient.value && option.records > 0 && compareLabels(option.label, selectedPatient.label) === 0)
+    : [];
 
   // Every record matching the current filters, for the export.
   const loadAllRows = useCallback(
@@ -597,18 +681,24 @@ export default function AdminRecords() {
         <div style={{ padding: 18, borderBottom: `1px solid ${C.border}`, background: "linear-gradient(to right,#f8fafd,#fff)", display: "grid", gap: 14 }}>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(240px,1.6fr) repeat(2,minmax(170px,1fr)) auto", gap: 10, alignItems: "center" }}>
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search record, patient, diagnosis..." style={inputStyle} />
-            <select value={patientFilter} onChange={(event) => setPatientFilter(event.target.value)} style={inputStyle}>
-              <option value="all">All Patients</option>
-              {patients.map((patient) => (
-                <option key={patient.id} value={patient.id}>
-                  {patientName(patient)}{patient.is_active === false ? " (deactivated)" : ""}
-                </option>
-              ))}
-            </select>
-            <select value={doctorFilter} onChange={(event) => setDoctorFilter(event.target.value)} style={inputStyle}>
-              <option value="all">All Doctors</option>
-              {doctors.map((doctor) => <option key={doctor.user_id} value={doctor.user_id}>{doctorName(doctor)}</option>)}
-            </select>
+            <SearchSelect
+              value={patientFilter}
+              onChange={setPatientFilter}
+              options={patientOptions}
+              allLabel="All Patients"
+              searchPlaceholder="Search patients..."
+              emptyText="No patients match your search."
+              ariaLabel="Patient filter"
+            />
+            <SearchSelect
+              value={doctorFilter}
+              onChange={setDoctorFilter}
+              options={doctorOptions}
+              allLabel="All Doctors"
+              searchPlaceholder="Search doctors..."
+              emptyText="No doctors match your search."
+              ariaLabel="Doctor filter"
+            />
             <Button onClick={() => { setSearch(""); setPatientFilter("all"); setDoctorFilter("all"); }}>Clear</Button>
           </div>
           <div style={{ color: C.text, fontSize: 12, fontWeight: 800 }}>
@@ -638,8 +728,27 @@ export default function AdminRecords() {
               ) : records.length === 0 ? (
                 <tr>
                   <td colSpan={8} style={{ padding: 42, textAlign: "center" }}>
-                    <div style={{ color: C.navy, fontSize: 16, fontWeight: 900 }}>No consultation records found</div>
-                    <div style={{ color: C.text, fontSize: 13, marginTop: 5 }}>Create records after a patient visit or completed appointment.</div>
+                    <div style={{ color: C.navy, fontSize: 16, fontWeight: 900 }}>
+                      {isFiltered ? "No consultation records match your filters" : "No consultation records found"}
+                    </div>
+                    {!isFiltered ? (
+                      <div style={{ color: C.text, fontSize: 13, marginTop: 5 }}>Create records after a patient visit or completed appointment.</div>
+                    ) : sameNameWithRecords.length > 0 ? (
+                      <>
+                        <div style={{ color: C.text, fontSize: 13, marginTop: 5 }}>
+                          {selectedPatient.label} (#{selectedPatient.value}) has no consultation records. Another patient record with the same name does:
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+                          {sameNameWithRecords.map((option) => (
+                            <Button key={option.value} onClick={() => setPatientFilter(option.value)}>
+                              Show #{option.value} ({recordCountText(option.records)})
+                            </Button>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ color: C.text, fontSize: 13, marginTop: 5 }}>Try a different patient or doctor, or clear the filters.</div>
+                    )}
                   </td>
                 </tr>
               ) : (

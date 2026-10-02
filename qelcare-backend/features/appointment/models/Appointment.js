@@ -514,10 +514,25 @@ const Appointment = {
 
   // Whole-dataset counts for the Appointment Management cards (never limited to
   // the page that happens to be loaded).
-  async stats() {
-    const [all, today] = await Promise.all([
+  //   withDoctors  also return `by_doctor`: every account that has appointments
+  //                as the doctor, whatever its status or role is now, with how
+  //                many - so the Admin doctor filter can offer each of them (a
+  //                deactivated doctor's appointments are still on the list).
+  async stats({ withDoctors = false } = {}) {
+    const [all, today, byDoctor] = await Promise.all([
       db.query("SELECT status, COUNT(*)::int AS n FROM appointments GROUP BY status"),
       this.todayCounts(),
+      withDoctors
+        ? db.query(
+          `SELECT a.doctor_id, u.first_name, u.last_name, u.username, u.status,
+                  r.role_name AS role, s.specialty_name, COUNT(*)::int AS appointments
+             FROM appointments a
+             JOIN users u ON u.user_id = a.doctor_id
+             LEFT JOIN roles r ON r.role_id = u.role_id
+             LEFT JOIN specialties s ON s.specialty_id = u.specialty_id
+            GROUP BY a.doctor_id, u.first_name, u.last_name, u.username, u.status, r.role_name, s.specialty_name`
+        )
+        : null,
     ]);
     const byStatus = Object.fromEntries(VALID_STATUSES.map((s) => [s, 0]));
     for (const row of all.rows) byStatus[row.status] = row.n;
@@ -527,6 +542,7 @@ const Appointment = {
       by_status: byStatus,
       lost: LOST_STATUSES.reduce((sum, s) => sum + (byStatus[s] || 0), 0),
       today,
+      ...(byDoctor ? { by_doctor: byDoctor.rows } : {}),
     };
   },
 

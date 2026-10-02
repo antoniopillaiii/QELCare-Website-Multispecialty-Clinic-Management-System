@@ -151,6 +151,23 @@ const recordController = {
     }
   },
 
+  // The patients and doctors that have records, with counts, for the list's
+  // filter pickers (Admin only, see recordRoutes). Counted with the same
+  // visibility rules as the list itself - the per-role confidentiality filter,
+  // and a doctor's own records only - so the numbers can never describe a
+  // record the caller's list would not show.
+  async getFilterOptions(req, res) {
+    try {
+      const options = await MedicalRecord.filterOptions({
+        doctor_id: req.user?.role === "Doctor" ? req.user.user_id : null,
+        viewer: viewerOf(req),
+      });
+      res.json({ success: true, data: options });
+    } catch (err) {
+      sendError(res, err, "Records filter options error", "Failed to fetch medical record filter options.");
+    }
+  },
+
   async getById(req, res) {
     try {
       // Viewer-filtered: a confidential record a role may not see 404s

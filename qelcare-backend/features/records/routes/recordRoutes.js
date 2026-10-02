@@ -13,6 +13,9 @@ router.post("/", authorize(["Doctor"]), ctrl.create);
 // not the full record.
 router.get("/", authorize(["Admin", "Nurse", "Doctor"]), ctrl.getAll);
 router.get("/summary", authorize(["Admin", "Nurse", "Doctor"]), ctrl.getSummary);
+// Counts for the Admin screen's patient / doctor pickers. Admin only: it names
+// doctor accounts with their current status and role, which other roles don't see.
+router.get("/filter-options", authorize(["Admin"]), ctrl.getFilterOptions);
 router.get("/patient/:patientId", authorize(["Admin", "Nurse", "Doctor"]), requireIdParam("patientId", "patient"), ctrl.getByPatient);
 router.get("/:id", authorize(["Admin", "Nurse", "Doctor"]), requireIdParam("id", "medical record"), ctrl.getById);
 router.put("/:id", authorize(["Doctor"]), requireIdParam("id", "medical record"), ctrl.update);
