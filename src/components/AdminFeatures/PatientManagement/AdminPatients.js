@@ -357,17 +357,18 @@ function PatientModal({ mode, patient, saving, onClose, onSave, duplicates, onCr
 
               {duplicates?.length > 0 && (
                 <div role="alert" style={{ padding: "12px 14px", borderRadius: 10, background: C.amberL, color: C.amber, border: "1px solid #f2d9a8", fontSize: 13, fontWeight: 700, display: "grid", gap: 8 }}>
-                  <div style={{ fontWeight: 900 }}>Possible duplicate — {duplicates.length === 1 ? "an existing record matches" : `${duplicates.length} existing records match`} this name and date of birth or phone:</div>
+                  <div style={{ fontWeight: 900 }}>Possible duplicate — {duplicates.length === 1 ? "an existing record has" : `${duplicates.length} existing records have`} the same details:</div>
                   <ul style={{ margin: 0, paddingLeft: 18, color: C.navy, fontWeight: 700 }}>
                     {duplicates.map((d) => (
                       <li key={d.id}>
-                        #{d.id} {d.display_name} — born {d.date_of_birth ? formatDate(d.date_of_birth) : "not set"} — {d.phone || "no phone"} — {d.is_active ? "Active" : "Inactive"}
+                        #{d.id} {d.display_name} — born {d.date_of_birth ? formatDate(d.date_of_birth) : "not set"} — {d.phone || "no phone"} — {d.email || "no email"} — {d.is_active ? "Active" : "Inactive"}
+                        {d.matched_on?.length > 0 && <div style={{ color: C.amber, fontWeight: 900 }}>Same {d.matched_on.join(", ")}</div>}
                       </li>
                     ))}
                   </ul>
-                  <div>If this is a different person, choose Create anyway. Otherwise cancel and use the existing record.</div>
+                  <div>If this is a different person, choose {isEdit ? "Save anyway" : "Create anyway"}. Otherwise cancel and use the existing record.</div>
                   <div>
-                    <Button variant="primary" onClick={onCreateAnyway} disabled={saving}>{saving ? "Saving..." : "Create anyway"}</Button>
+                    <Button variant="primary" onClick={onCreateAnyway} disabled={saving}>{saving ? "Saving..." : isEdit ? "Save anyway" : "Create anyway"}</Button>
                   </div>
                 </div>
               )}
@@ -460,8 +461,8 @@ export default function AdminPatients() {
   // A failed load must not look like an empty patient list (see Users page).
   const [loadError, setLoadError] = useState("");
   const [hasLoaded, setHasLoaded] = useState(false);
-  // Server-reported possible duplicates for the record being added, plus the
-  // payload to resend if the user confirms it is a different person.
+  // Server-reported possible duplicates for the record being added or edited,
+  // plus the payload to resend if the user confirms it is a different person.
   const [duplicateCheck, setDuplicateCheck] = useState(null);
   const [saving, setSaving] = useState(false);
   const [alert, setAlert] = useState(null);
@@ -558,7 +559,7 @@ export default function AdminPatients() {
       setModal(null);
       showAlert("ok", isEdit ? "Patient updated successfully" : "Patient created successfully");
     } catch (error) {
-      if (!isEdit && error.payload?.code === "POSSIBLE_DUPLICATE") {
+      if (error.payload?.code === "POSSIBLE_DUPLICATE") {
         // Keep the form open and show the matches inside it; the user decides.
         setDuplicateCheck({ matches: error.payload.duplicates || [], payload });
         return;

@@ -33,6 +33,42 @@ function phoneError(value, label) {
   return null;
 }
 
+// A DATE column arrives from node-postgres as a JS Date at local midnight.
+function dateText(value) {
+  if (!value) return "";
+  if (value instanceof Date) {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  }
+  return String(value).slice(0, 10);
+}
+
+// The identifiers compared for possible duplicates (see
+// Patient.findPossibleDuplicates). When editing, the patient's own record is
+// excluded and only identifiers being changed are compared, so saving a record
+// never warns about details it already had.
+function duplicateCriteria(input, existing = null) {
+  const text = (value) => String(value ?? "").trim();
+  const changed = (next, current) => !existing || text(next) !== text(current);
+  const phone = input.phone ?? input.contact;
+  const dob = dateText(input.date_of_birth);
+  const checkName = changed(input.first_name, existing?.first_name)
+    || changed(input.last_name, existing?.last_name)
+    || changed(dob, dateText(existing?.date_of_birth));
+
+  return {
+    first_name: checkName ? input.first_name : null,
+    last_name: checkName ? input.last_name : null,
+    date_of_birth: dob || null,
+    phone: changed(phone, existing?.phone || existing?.contact) ? phone : null,
+    email: changed(input.email, existing?.email) ? input.email : null,
+    philhealth_no: changed(input.philhealth_no, existing?.philhealth_no) ? input.philhealth_no : null,
+    senior_pwd_id: changed(input.senior_pwd_id, existing?.senior_pwd_id) ? input.senior_pwd_id : null,
+    exclude_id: existing?.id || null,
+  };
+}
+
+const DUPLICATE_MESSAGE = "A patient record with the same details already exists.";
+
 const patientController = {
   async create(req, res) {
     try {
@@ -60,19 +96,15 @@ const patientController = {
       const { user_id: _ignoredUserId, confirm_duplicate: confirmDuplicate, ...input } = req.body;
 
       // Warn before creating what looks like an existing patient. Staff can
-      // still create it on purpose (two different people can share a name).
-      if (confirmDuplicate !== true && firstName && lastName) {
-        const duplicates = await Patient.findPossibleDuplicates({
-          first_name: firstName,
-          last_name: lastName,
-          date_of_birth: futureDobError(input.date_of_birth) ? null : (input.date_of_birth || null),
-          phone: input.phone ?? input.contact ?? null,
-        });
+      // still create it on purpose (two different people can share a name, and
+      // family members share contact details).
+      if (confirmDuplicate !== true) {
+        const duplicates = await Patient.findPossibleDuplicates(duplicateCriteria(input));
         if (duplicates.length) {
           return res.status(409).json({
             success: false,
             code: "POSSIBLE_DUPLICATE",
-            message: "A patient record with the same details already exists.",
+            message: DUPLICATE_MESSAGE,
             duplicates,
           });
         }
@@ -170,6 +202,19 @@ const patientController = {
       const phoneMsg = (changed(nextPhone, existing.phone || existing.contact) && phoneError(nextPhone, "Phone"))
         || (changed(req.body.emergency_contact_phone, existing.emergency_contact_phone) && phoneError(req.body.emergency_contact_phone, "Emergency phone"));
       if (phoneMsg) return res.status(400).json({ success: false, message: phoneMsg });
+
+      // Same warning as on create, for identifiers this edit changes.
+      if (req.body.confirm_duplicate !== true) {
+        const duplicates = await Patient.findPossibleDuplicates(duplicateCriteria(req.body, existing));
+        if (duplicates.length) {
+          return res.status(409).json({
+            success: false,
+            code: "POSSIBLE_DUPLICATE",
+            message: DUPLICATE_MESSAGE,
+            duplicates,
+          });
+        }
+      }
 
       const patient = await Patient.update(req.params.id, req.body);
       if (!patient) return res.status(404).json({ success: false, message: "Patient not found." });

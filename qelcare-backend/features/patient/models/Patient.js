@@ -145,35 +145,77 @@ const Patient = {
     return result.rows[0] || null;
   },
 
-  // Existing records that look like the same person: same first + last name
-  // (case-insensitive) AND the same date of birth or the same phone number.
-  // With neither a DOB nor a phone to compare, a matching name alone is enough
-  // to flag. Used to warn before creating a duplicate — real patients can
-  // share names, so this is a warning the user can override, not a rule.
-  async findPossibleDuplicates({ first_name, last_name, date_of_birth = null, phone = null }) {
-    const phoneDigits = phone ? String(phone).replace(/\D/g, "").slice(-10) : null;
+  // Existing records that look like the same person. A record is flagged when
+  // it shares ANY of: first + last name (case-insensitive), phone (last 10
+  // digits), email (case-insensitive), PhilHealth No. or Senior/PWD ID
+  // (letters and digits only, so dashes/spaces don't matter). A matching date
+  // of birth is reported alongside those, but never flags a record on its own
+  // (unrelated people share birthdays). A blank value is never compared.
+  // Each row carries `matched_on`, the labels of the fields that matched.
+  // `exclude_id` leaves out the record being edited. Used to warn before
+  // saving a duplicate — real patients can share names and families share
+  // contact details, so this is a warning the user can override, not a rule.
+  async findPossibleDuplicates({
+    first_name = null,
+    last_name = null,
+    date_of_birth = null,
+    phone = null,
+    email = null,
+    philhealth_no = null,
+    senior_pwd_id = null,
+    exclude_id = null,
+  }) {
+    const text = (value) => String(value ?? "").trim();
+    const idText = (value) => text(value).replace(/[^a-z0-9]/gi, "").toUpperCase();
+    const hasName = Boolean(text(first_name) && text(last_name));
+
     const result = await db.query(
-      `SELECT
-         p.id,
-         COALESCE(NULLIF(TRIM(CONCAT_WS(' ', p.first_name, p.last_name)), ''), p.name) AS display_name,
-         TO_CHAR(p.date_of_birth, 'YYYY-MM-DD') AS date_of_birth,
-         COALESCE(p.phone, p.contact) AS phone,
-         p.is_active
-       FROM patients p
-       WHERE (
-           (LOWER(TRIM(p.first_name)) = LOWER(TRIM($1)) AND LOWER(TRIM(p.last_name)) = LOWER(TRIM($2)))
-           OR (p.first_name IS NULL AND LOWER(TRIM(p.name)) = LOWER(TRIM($1) || ' ' || TRIM($2)))
-         )
-         AND (
-           ($3::date IS NOT NULL AND p.date_of_birth = $3::date)
-           OR ($4::text IS NOT NULL AND RIGHT(regexp_replace(COALESCE(p.phone, p.contact, ''), '\\D', '', 'g'), 10) = $4::text)
-           OR ($3::date IS NULL AND $4::text IS NULL)
-         )
-       ORDER BY p.id
+      `SELECT * FROM (
+         SELECT
+           p.id,
+           COALESCE(NULLIF(TRIM(CONCAT_WS(' ', p.first_name, p.last_name)), ''), p.name) AS display_name,
+           TO_CHAR(p.date_of_birth, 'YYYY-MM-DD') AS date_of_birth,
+           COALESCE(p.phone, p.contact) AS phone,
+           p.email,
+           p.is_active,
+           COALESCE($1::text IS NOT NULL AND (
+             (LOWER(TRIM(p.first_name)) = LOWER($1::text) AND LOWER(TRIM(p.last_name)) = LOWER($2::text))
+             OR (p.first_name IS NULL AND LOWER(TRIM(p.name)) = LOWER($1::text || ' ' || $2::text))
+           ), false) AS match_name,
+           COALESCE($3::date IS NOT NULL AND p.date_of_birth = $3::date, false) AS match_dob,
+           COALESCE($4::text IS NOT NULL AND RIGHT(regexp_replace(COALESCE(p.phone, p.contact, ''), '\\D', '', 'g'), 10) = $4::text, false) AS match_phone,
+           COALESCE($5::text IS NOT NULL AND LOWER(TRIM(p.email)) = $5::text, false) AS match_email,
+           COALESCE($6::text IS NOT NULL AND UPPER(regexp_replace(COALESCE(p.philhealth_no, ''), '[^A-Za-z0-9]', '', 'g')) = $6::text, false) AS match_philhealth,
+           COALESCE($7::text IS NOT NULL AND UPPER(regexp_replace(COALESCE(p.senior_pwd_id, ''), '[^A-Za-z0-9]', '', 'g')) = $7::text, false) AS match_senior
+         FROM patients p
+         WHERE ($8::integer IS NULL OR p.id <> $8::integer)
+       ) d
+       WHERE d.match_name OR d.match_phone OR d.match_email OR d.match_philhealth OR d.match_senior
+       ORDER BY d.id
        LIMIT 5`,
-      [first_name, last_name, date_of_birth || null, phoneDigits || null]
+      [
+        hasName ? text(first_name) : null,
+        hasName ? text(last_name) : null,
+        date_of_birth || null,
+        text(phone).replace(/\D/g, "").slice(-10) || null,
+        text(email).toLowerCase() || null,
+        idText(philhealth_no) || null,
+        idText(senior_pwd_id) || null,
+        exclude_id || null,
+      ]
     );
-    return result.rows;
+
+    return result.rows.map(({ match_name, match_dob, match_phone, match_email, match_philhealth, match_senior, ...row }) => ({
+      ...row,
+      matched_on: [
+        match_name && "Name",
+        match_dob && "Date of Birth",
+        match_phone && "Phone",
+        match_email && "Email",
+        match_philhealth && "PhilHealth No.",
+        match_senior && "Senior/PWD ID",
+      ].filter(Boolean),
+    }));
   },
 
   async findByUserId(userId) {
