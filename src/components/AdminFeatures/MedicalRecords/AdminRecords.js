@@ -5,7 +5,7 @@ import { authFetch } from "../../../utils/auth";
 import { ExportMenu } from "../../../utils/exportUtils";
 import { buildQuery, fetchAllPages } from "../../../utils/paginatedFetch";
 import { C } from "../../../utils/adminTheme";
-import { manilaToday } from "../../../utils/manilaDate";
+import { manilaDateOf, manilaToday } from "../../../utils/manilaDate";
 import { X } from "lucide-react";
 
 const EXPORT_COLUMNS = [
@@ -20,6 +20,7 @@ const EXPORT_COLUMNS = [
   { header: "Vitals", value: (record) => (record.vital_id ? `Vitals #${record.vital_id}` : "Not linked") },
   { header: "Follow-up", value: (record) => { const f = record.follow_up_date_text || record.follow_up_date; return f ? formatDate(f) : ""; } },
   { header: "Confidential", value: (record) => (record.is_confidential ? "Yes" : "No") },
+  { header: "Amended", value: (record) => (record.amended_at ? formatDate(manilaDateOf(record.amended_at)) : "") },
 ];
 
 const inputStyle = {
@@ -161,6 +162,13 @@ function RecordViewModal({ record, onClose }) {
             <DetailBox label="Appointment" value={record.appointment_id ? `APT-${String(record.appointment_id).padStart(5, "0")} / ${record.appointment_status || "No status"}` : "Not linked"} />
             <DetailBox label="Specialty" value={record.specialty_name} />
             <DetailBox label="Linked Vitals" value={record.vital_id ? `Vitals #${record.vital_id}` : "Not linked"} />
+            {/* Changed after the visit was paid. The previous values are in Activity Logs (RECORD_AMENDED). */}
+            {record.amended_at && (
+              <DetailBox
+                label={`Amended${record.amendment_count > 1 ? ` (${record.amendment_count} times)` : ""}`}
+                value={`${formatDate(manilaDateOf(record.amended_at))}${record.amended_by_name ? ` by ${record.amended_by_name}` : ""}\nReason: ${record.amendment_reason || "Not recorded"}`}
+              />
+            )}
           </section>
 
           {record.vital_id && (
@@ -642,6 +650,9 @@ export default function AdminRecords() {
                       <td data-label="Record" style={tdStyle}>
                         <div style={{ color: C.navy, fontWeight: 900 }}>MR-{String(recordId(record)).padStart(5, "0")}</div>
                         <div style={{ color: C.muted, fontSize: 12 }}>{record.is_confidential ? "Confidential" : "Standard"}</div>
+                        {record.amended_at && (
+                          <div style={{ color: C.amber, fontSize: 12, fontWeight: 800 }}>Amended {formatDate(manilaDateOf(record.amended_at))}</div>
+                        )}
                       </td>
                       <td data-label="Patient" style={tdStyle}>
                         <div style={{ color: C.navy, fontWeight: 900 }}>{record.patient_name || "Unknown patient"}</div>

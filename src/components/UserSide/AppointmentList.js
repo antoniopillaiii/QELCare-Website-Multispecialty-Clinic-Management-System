@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { authFetch, getUserRole } from "../../utils/auth";
+import { fetchAllPages } from "../../utils/paginatedFetch";
 import {
   ActionButton,
   EmptyState,
@@ -153,11 +154,16 @@ export default function AppointmentList() {
     setLoading(true);
     setError("");
     try {
-      const endpoint = isPatient ? "/appointments/me?limit=100" : "/appointments?limit=100";
-      const response = await authFetch(endpoint);
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.message || "Failed to load appointments.");
-      setAppointments(getRows(payload, "appointments"));
+      if (isPatient) {
+        const response = await authFetch("/appointments/me?limit=100");
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.message || "Failed to load appointments.");
+        setAppointments(getRows(payload, "appointments"));
+      } else {
+        // The API returns at most 100 rows per request, so load every page:
+        // the tabs, filters and counts below work on the full list.
+        setAppointments(await fetchAllPages("/appointments"));
+      }
     } catch (err) {
       setError(err.message);
     } finally {

@@ -2,6 +2,13 @@ const express = require("express");
 const router = express.Router();
 const ctrl = require("../controllers/medicationController");
 const { authenticate, authorize } = require("../../../shared/middleware/tokenMiddleware");
+const { isPositiveInt } = require("../../../shared/utils/requestValidation");
+
+// Reject non-numeric / out-of-range ids with a 400 before any query runs.
+router.param("id", (req, res, next, value) => {
+  if (isPositiveInt(value)) return next();
+  return res.status(400).json({ success: false, message: "Invalid medication id." });
+});
 
 router.use(authenticate);
 

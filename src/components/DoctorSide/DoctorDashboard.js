@@ -168,10 +168,12 @@ export default function DoctorDashboard() {
 
   const latestVital = vitals[0] || null;
 
-  async function updateQueueStatus(status, successMessage) {
+  // Returns true when the queue entry was updated. `errorPrefix` puts a failed
+  // step in context (e.g. the record was saved but the visit wasn't completed).
+  async function updateQueueStatus(status, successMessage, errorPrefix = "") {
     if (!selected?.queueEntry?.queue_id) {
-      setError("No active queue entry is linked to this patient.");
-      return;
+      setError(`${errorPrefix}No active queue entry is linked to this patient.`);
+      return false;
     }
 
     setActionLoading(true);
@@ -191,8 +193,10 @@ export default function DoctorDashboard() {
 
       setMessage(successMessage);
       await load();
+      return true;
     } catch (err) {
-      setError(err.message);
+      setError(`${errorPrefix}${err.message}`);
+      return false;
     } finally {
       setActionLoading(false);
     }
@@ -201,6 +205,43 @@ export default function DoctorDashboard() {
   const selectedQueueStatus = selected?.queueEntry?.status || "";
   const canStart = selectedQueueStatus === "WAITING" || selectedQueueStatus === "CALLED";
   const canComplete = selectedQueueStatus === "IN_PROGRESS";
+
+  // --------------------------------------------------------------------------
+  // "Save Record and Complete Visit" (the consultation form's button)
+  //
+  // Runs AFTER the consultation record has been saved. It then moves the
+  // patient's queue entry as far as the server rules allow:
+  //
+  //   Queue status   Vitals      What happens
+  //   -------------  ----------  ------------------------------------------
+  //   In Progress    recorded    Visit completed -> appointment For Billing.
+  //   In Progress    missing     Stays In Progress. Record is saved.
+  //   Waiting/Called recorded    Consultation is STARTED AUTOMATICALLY
+  //                              (Waiting -> In Progress), then completed
+  //                              -> appointment For Billing.
+  //   Waiting/Called missing     Consultation is started automatically and
+  //                              the patient stays In Progress. Record is
+  //                              saved.
+  //
+  // Why it auto-starts: saving a consultation record means the doctor is
+  // seeing the patient, and the server only completes a visit that is In
+  // Progress (Waiting -> Done is not an allowed move). It is exactly what
+  // pressing Start Consultation and then Complete Visit would do, in one step.
+  //
+  // What it never does: it does not skip the vitals rule (the server refuses
+  // to complete a visit without vitals), it does not bill, and it never touches
+  // another doctor's patient (the server checks queue ownership).
+  //
+  // When the visit can't be completed, the doctor sees "Consultation record
+  // saved, but the visit is not completed yet: <reason>", the form is replaced
+  // by the saved-record notice, and Complete Visit (top of the page) finishes
+  // the visit once the reason is resolved, e.g. after the nurse records vitals.
+  // --------------------------------------------------------------------------
+  async function completeAfterRecord() {
+    const notCompleted = "Consultation record saved, but the visit is not completed yet: ";
+    if (canStart && !(await updateQueueStatus("IN_PROGRESS", "", notCompleted))) return;
+    await updateQueueStatus("DONE", "Medical record saved and visit completed.", notCompleted);
+  }
 
   const callEmergency = () => {
     setConfirm({
@@ -331,7 +372,7 @@ export default function DoctorDashboard() {
           <MedicalRecords
             appointment={selected}
             latestVital={latestVital}
-            onCreated={() => updateQueueStatus("DONE", "Medical record saved and visit completed.")}
+            onCreated={completeAfterRecord}
           />
         )}
       </div>

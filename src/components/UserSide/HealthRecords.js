@@ -14,7 +14,7 @@ import {
 } from "../Workflow/ClinicUi";
 import Pagination, { usePagination } from "../common/Pagination";
 import ConfirmModal from "../common/ConfirmModal";
-import { manilaToday } from "../../utils/manilaDate";
+import { manilaNowMinute, manilaToday } from "../../utils/manilaDate";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -507,6 +507,14 @@ function MedicationsTab() {
   useEffect(() => { loadMeds(); }, [loadMeds]);
   useEffect(() => { loadSchedule(scheduleDate); }, [scheduleDate, loadSchedule]);
 
+  // The clinic's current minute, refreshed so a dose's Take / Skip buttons
+  // appear when it becomes due. (The server refuses doses that aren't due.)
+  const [nowMinute, setNowMinute] = useState(manilaNowMinute());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMinute(manilaNowMinute()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
   const resetForm = () => { setForm(emptyMedForm); setEditingId(null); setParsed([]); setFiles([]); if (fileInputRef.current) fileInputRef.current.value = ""; };
 
   const setField = (e) => {
@@ -779,6 +787,8 @@ function MedicationsTab() {
                         <span style={{ color: "#0f6b3c", fontWeight: 900, fontSize: 13 }}>Taken</span>
                       ) : slot.status === "skipped" ? (
                         <span style={{ color: "#b91c1c", fontWeight: 900, fontSize: 13 }}>Skipped</span>
+                      ) : `${schedule.date}T${slot.scheduled_time}` > nowMinute ? (
+                        <span style={{ color: "#6b778c", fontWeight: 800, fontSize: 13 }}>Not due yet</span>
                       ) : (
                         <>
                           <ActionButton onClick={() => logDose(slot, "taken")}>Take</ActionButton>

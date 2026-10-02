@@ -10,6 +10,7 @@ import {
   formatDate,
 } from "../Workflow/ClinicUi";
 import ReasonModal from "../common/ReasonModal";
+import { manilaDateOf } from "../../utils/manilaDate";
 
 export default function MedicationApprovals() {
   const [meds, setMeds] = useState([]);
@@ -129,7 +130,7 @@ export default function MedicationApprovals() {
                     </div>
                     {med.instructions && <div style={{ color: "#42526a", fontSize: 13, marginTop: 3 }}>Instructions: {med.instructions}</div>}
                     <div style={{ color: "#94a2b6", fontSize: 12, marginTop: 4 }}>
-                      Submitted {formatDate(med.created_at)} - {med.source === "ocr" ? "via AI scan" : "added manually"}
+                      Submitted {formatDate(manilaDateOf(med.created_at))} - {med.source === "ocr" ? "via AI scan" : "added manually"}
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>

@@ -78,6 +78,15 @@ const recordController = {
       if (!isPositiveInt(req.body?.patient_id)) {
         return res.status(400).json({ success: false, message: "Select a valid patient." });
       }
+      // A consultation record always documents a visit (the model then checks
+      // the visit is eligible and belongs to this doctor and patient).
+      if (!isPositiveInt(req.body?.appointment_id)) {
+        return res.status(400).json({
+          success: false,
+          code: "VISIT_REQUIRED",
+          message: "Select the visit this record is for. A consultation record must be linked to an eligible visit.",
+        });
+      }
       const patientId = Number(req.body.patient_id);
 
       const patient = await Patient.findById(patientId);
@@ -171,7 +180,10 @@ const recordController = {
       }
 
       // Patients see all of their OWN records, including confidential ones.
-      const records = await MedicalRecord.findByPatient(patient.id, { role: "PatientSelf" });
+      // They are told that a record was amended and when; the reason and who
+      // amended it are staff-facing.
+      const records = (await MedicalRecord.findByPatient(patient.id, { role: "PatientSelf" }))
+        .map(({ amendment_reason: _reason, amended_by_name: _by, ...record }) => record);
       res.json({ success: true, data: records, records });
     } catch (err) {
       sendError(res, err, "Get my records error", "Failed to fetch your medical records.");
@@ -204,28 +216,54 @@ const recordController = {
         return res.json({ success: true, changed: false, message: "No changes to save.", data: current, record: current });
       }
 
-      const record = await MedicalRecord.update(req.params.id, changes, {
+      // After the visit is paid, a change is an amendment and needs a reason.
+      let amendment = null;
+      if (MedicalRecord.isPaidVisit(current)) {
+        const reason = typeof req.body?.amendment_reason === "string" ? req.body.amendment_reason.trim() : "";
+        if (!reason) {
+          return res.status(400).json({
+            success: false,
+            code: "AMENDMENT_REASON_REQUIRED",
+            message: "This visit is already paid. Enter the reason for amending the record.",
+          });
+        }
+        if (reason.length > MedicalRecord.MAX_AMENDMENT_REASON) {
+          return res.status(400).json({
+            success: false,
+            message: `The amendment reason must be ${MedicalRecord.MAX_AMENDMENT_REASON} characters or less.`,
+          });
+        }
+        amendment = { reason, userId, ip: logger.getIP(req) };
+      }
+
+      const { record, amended } = await MedicalRecord.update(req.params.id, changes, {
         patientId: current.patient_id,
         doctorId: owner,
         assignDoctorId: current.doctor_id ? null : owner,
+        amendment,
       });
 
-      await writeLog(req, {
-        action: "RECORD_UPDATED",
-        entityType: "medical_record",
-        entityId: getRecordId(record),
-        description: `Medical record #${getRecordId(record)} updated`,
-        metadata: {
-          patient_id: record.patient_id,
-          appointment_id: record.appointment_id || null,
-          fields: Object.keys(changes),
-        },
-      });
+      // An amendment's audit row (with the old and new values) is written by
+      // the model together with the change itself.
+      if (!amended) {
+        await writeLog(req, {
+          action: "RECORD_UPDATED",
+          entityType: "medical_record",
+          entityId: getRecordId(record),
+          description: `Medical record #${getRecordId(record)} updated`,
+          metadata: {
+            patient_id: record.patient_id,
+            appointment_id: record.appointment_id || null,
+            fields: Object.keys(changes),
+          },
+        });
+      }
 
       res.json({
         success: true,
         changed: true,
-        message: "Medical record updated.",
+        amended,
+        message: amended ? "Medical record amended." : "Medical record updated.",
         data: record,
         record,
       });

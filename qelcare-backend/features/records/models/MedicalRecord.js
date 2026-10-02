@@ -110,14 +110,50 @@ function checkClinicalRules(record) {
   }
 }
 
+// A consultation record documents a visit that actually took place, so it can
+// only be linked to an appointment whose patient has arrived or been seen:
+//   IN_QUEUE     in today's queue (waiting, called or being seen)
+//   FOR_BILLING  seen, awaiting payment
+//   COMPLETED    seen and paid
+// PENDING / CONFIRMED / RESCHEDULED appointments are requests or bookings the
+// patient hasn't arrived for, and CANCELLED / NO_SHOW visits never happened.
+const RECORD_ELIGIBLE_STATUSES = ["IN_QUEUE", "FOR_BILLING", "COMPLETED"];
+
+// Once a visit is paid (COMPLETED) its record is no longer edited freely. It
+// can only be AMENDED: a reason is required, the old and new values go into
+// the audit trail, and the record is shown as amended. These fields are frozen
+// from then on, so the record can't silently disagree with the bill or move to
+// another period or visit.
+const PAID_STATUS = "COMPLETED";
+const FROZEN_AFTER_PAYMENT = {
+  visit_date: "The visit date can't be changed once the visit is paid.",
+  lab_requests: "Requested procedures and labs are locked once the visit is paid, so the record can't disagree with the bill.",
+};
+const AMENDED_ACTION = "RECORD_AMENDED";
+const MAX_AMENDMENT_REASON = 500;
+
+function isPaidVisit(record) {
+  return record?.appointment_id != null && record.appointment_status === PAID_STATUS;
+}
+
+const NOT_A_VISIT_REASON = {
+  PENDING: "is still a pending request",
+  CONFIRMED: "is confirmed but the patient hasn't been checked in yet",
+  RESCHEDULED: "was rescheduled and hasn't taken place",
+  CANCELLED: "was cancelled",
+  NO_SHOW: "was marked No Show",
+};
+
 // A record may only point at clinical data of its own patient, and at an
 // appointment of the authoring doctor (doctors can only see their own
-// appointments). One record per appointment. Runs inside the caller's
-// transaction; the appointment row lock serializes concurrent writers.
+// appointments) that is an actual visit (see RECORD_ELIGIBLE_STATUSES). One
+// record per appointment. Applies whenever a link is set: on create, and on
+// update when the record is moved to another appointment. Runs inside the
+// caller's transaction; the appointment row lock serializes concurrent writers.
 async function checkLinks(client, { patientId, doctorId, appointmentId, vitalId, recordId = null }) {
   if (appointmentId) {
     const appointment = (await client.query(
-      "SELECT id, patient_id, doctor_id FROM appointments WHERE id = $1 FOR UPDATE",
+      "SELECT id, patient_id, doctor_id, status, TO_CHAR(date, 'YYYY-MM-DD') AS date FROM appointments WHERE id = $1 FOR UPDATE",
       [appointmentId]
     )).rows[0];
     if (!appointment) throw appError(404, "Appointment not found.");
@@ -126,6 +162,13 @@ async function checkLinks(client, { patientId, doctorId, appointmentId, vitalId,
     }
     if (doctorId && Number(appointment.doctor_id) !== Number(doctorId)) {
       throw appError(403, "You can only write records for your own appointments.");
+    }
+    if (!RECORD_ELIGIBLE_STATUSES.includes(appointment.status)) {
+      const reason = NOT_A_VISIT_REASON[appointment.status] || "is not a visit that took place";
+      throw appError(400, `A consultation record can't be written for this appointment because it ${reason}. Records are for visits that are in the queue, awaiting billing or completed.`);
+    }
+    if (appointment.date > manilaToday()) {
+      throw appError(400, "A consultation record can't be written for an appointment scheduled on a future date.");
     }
     const existing = (await client.query(
       "SELECT record_id FROM medical_records WHERE appointment_id = $1 AND ($2::int IS NULL OR record_id <> $2::int) LIMIT 1",
@@ -321,7 +364,11 @@ const SELECT_RECORD = `
     v.chief_complaint AS vital_chief_complaint,
     v.nurse_notes,
     v.recorded_at AS vital_recorded_at,
-    COALESCE(NULLIF(TRIM(CONCAT_WS(' ', n.first_name, n.last_name)), ''), n.username) AS nurse_name
+    COALESCE(NULLIF(TRIM(CONCAT_WS(' ', n.first_name, n.last_name)), ''), n.username) AS nurse_name,
+    COALESCE(am.amendment_count, 0) AS amendment_count,
+    am.amended_at,
+    am.amendment_reason,
+    am.amended_by_name
   FROM medical_records mr
   JOIN patients p ON mr.patient_id = p.id
   LEFT JOIN appointments a ON mr.appointment_id = a.id
@@ -331,6 +378,22 @@ const SELECT_RECORD = `
   LEFT JOIN roles cr ON c.role_id = cr.role_id
   LEFT JOIN vitals v ON mr.vital_id = v.id
   LEFT JOIN users n ON v.nurse_id = n.user_id
+  -- Amendments made after the visit was paid: the latest one and how many.
+  -- They live in the audit trail (RECORD_AMENDED rows, written in the same
+  -- transaction as the change), so the marker and the history can't disagree.
+  LEFT JOIN LATERAL (
+    SELECT l.created_at AS amended_at,
+           l.metadata->>'reason' AS amendment_reason,
+           COALESCE(NULLIF(TRIM(CONCAT_WS(' ', au.first_name, au.last_name)), ''), au.username) AS amended_by_name,
+           (COUNT(*) OVER ())::int AS amendment_count
+      FROM activity_logs l
+      LEFT JOIN users au ON au.user_id = l.user_id
+     WHERE l.action = '${AMENDED_ACTION}'
+       AND l.entity_type = 'medical_record'
+       AND l.entity_id = mr.record_id
+     ORDER BY l.log_id DESC
+     LIMIT 1
+  ) am ON true
 `;
 
 const MedicalRecord = {
@@ -348,6 +411,12 @@ const MedicalRecord = {
       is_confidential: fields.is_confidential ?? false,
     };
     for (const key of TEXT_FIELDS) record[key] = fields[key] ?? null;
+    // Every new record documents a visit: it must be linked to one (checkLinks
+    // then requires that visit to be eligible). Older records with no
+    // appointment stay readable; no new ones can be created.
+    if (!record.appointment_id) {
+      throw appError(400, "A consultation record must be linked to the visit it documents. Select the visit first.");
+    }
     checkClinicalRules(record);
 
     const recordId = await inTransaction(async (client) => {
@@ -509,14 +578,55 @@ const MedicalRecord = {
     for (const key of Object.keys(fields)) {
       if ((fields[key] ?? null) !== (before[key] ?? null)) changes[key] = fields[key];
     }
+
+    // A record stays with the visit it documents: once linked it can't be
+    // moved to another appointment or detached. (An older record that has no
+    // appointment may still be linked to an eligible visit.)
+    if ("appointment_id" in changes && before.appointment_id !== null) {
+      throw appError(400, "This record is linked to its visit. It can't be moved to another appointment or detached.");
+    }
+    if (isPaidVisit(current)) {
+      for (const [key, message] of Object.entries(FROZEN_AFTER_PAYMENT)) {
+        if (key in changes) throw appError(400, message);
+      }
+    }
     return changes;
   },
 
+  isPaidVisit,
+  MAX_AMENDMENT_REASON,
+
   // Applies prepared changes. `patientId` / `doctorId` are the record's own,
-  // used to validate any new appointment / vitals link.
-  async update(recordId, changes, { patientId, doctorId, assignDoctorId = null }) {
+  // used to validate any new appointment / vitals link. `amendment`
+  // ({ reason, userId, ip }) must be passed when the visit is paid: the change
+  // and its audit row (old and new values) are then written together.
+  // Returns { record, amended }.
+  async update(recordId, changes, { patientId, doctorId, assignDoctorId = null, amendment = null }) {
+    let amended = false;
     await inTransaction(async (client) => {
-      await client.query("SELECT record_id FROM medical_records WHERE record_id = $1 FOR UPDATE", [recordId]);
+      const locked = (await client.query(
+        `SELECT mr.*, TO_CHAR(mr.visit_date, 'YYYY-MM-DD') AS visit_date_text,
+                TO_CHAR(mr.follow_up_date, 'YYYY-MM-DD') AS follow_up_date_text
+           FROM medical_records mr WHERE mr.record_id = $1 FOR UPDATE`,
+        [recordId]
+      )).rows[0];
+      if (!locked) throw appError(404, "Medical record not found.");
+
+      // Re-check "paid" under a lock on the visit, so a payment that lands
+      // between reading the record and saving it can't be missed.
+      let paid = false;
+      if (locked.appointment_id) {
+        const visit = (await client.query("SELECT status FROM appointments WHERE id = $1 FOR UPDATE", [locked.appointment_id])).rows[0];
+        paid = visit?.status === PAID_STATUS;
+      }
+      if (paid && !amendment) {
+        throw appError(409, "This visit has just been paid. Reload the record: changes now need an amendment reason, and the visit date and requested procedures are locked.");
+      }
+      if (paid && Object.keys(FROZEN_AFTER_PAYMENT).some((key) => key in changes)) {
+        throw appError(409, "This visit has just been paid. Reload the record: the visit date and requested procedures are now locked.");
+      }
+      amended = paid;
+
       await checkLinks(client, {
         patientId,
         doctorId,
@@ -545,9 +655,41 @@ const MedicalRecord = {
          WHERE record_id = $${params.length}`,
         params
       );
+
+      if (amended) {
+        // Audit row for the amendment, in the same transaction: who, why, and
+        // the value of every changed field before and after.
+        const valueBefore = (key) => {
+          if (key === "visit_date") return locked.visit_date_text;
+          if (key === "follow_up_date") return locked.follow_up_date_text;
+          return locked[key] ?? null;
+        };
+        const fieldChanges = {};
+        for (const [key, value] of Object.entries(changes)) {
+          fieldChanges[key] = { from: valueBefore(key), to: value ?? null };
+        }
+        await client.query(
+          `INSERT INTO activity_logs (user_id, action, entity_type, entity_id, description, ip_address, metadata)
+           VALUES ($1, $2, 'medical_record', $3, $4, $5::inet, $6)`,
+          [
+            amendment.userId,
+            AMENDED_ACTION,
+            recordId,
+            `Medical record #${recordId} amended after payment`,
+            amendment.ip || null,
+            JSON.stringify({
+              patient_id: locked.patient_id,
+              appointment_id: locked.appointment_id,
+              reason: amendment.reason,
+              fields: Object.keys(changes),
+              changes: fieldChanges,
+            }),
+          ]
+        );
+      }
     });
 
-    return this.findById(recordId);
+    return { record: await this.findById(recordId), amended };
   },
 };
 

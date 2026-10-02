@@ -1,5 +1,5 @@
 const db = require("../../../config/database");
-const { manilaToday, addDays } = require("../../../shared/utils/manilaTime");
+const { manilaToday, manilaDateOf, manilaNowMinuteKey, addDays, isValidDateString } = require("../../../shared/utils/manilaTime");
 
 const SELECT_FIELDS = `
   medication_id, patient_id, created_by, drug_name, dosage, form, instructions,
@@ -164,9 +164,35 @@ const PatientMedication = {
       input.times_of_day !== undefined ? input.times_of_day : existing.times_of_day,
       freq
     );
-    const startDate = cleanDate(input.start_date) || existing.start_date;
-    let endDate = input.end_date !== undefined ? cleanDate(input.end_date) : existing.end_date;
-    const status = VALID_STATUS.includes(input.status) ? input.status : existing.status;
+    const existingStart = manilaDateOf(existing.start_date);
+    const startDate = cleanDate(input.start_date) || existingStart || null;
+
+    // Duration and end date follow the same rule as create(): the end date is
+    // the explicit one when sent, otherwise start + duration - 1. Sending a
+    // blank duration clears an end date that came from a duration.
+    const durationSent = input.duration_days !== undefined;
+    const parsedDuration = parseInt(input.duration_days, 10);
+    const durationDays = durationSent
+      ? (Number.isFinite(parsedDuration) && parsedDuration > 0 ? parsedDuration : null)
+      : existing.duration_days;
+    let endDate;
+    if (input.end_date !== undefined) {
+      endDate = cleanDate(input.end_date);
+    } else if (durationDays && (durationSent || startDate !== existingStart)) {
+      endDate = addDays(startDate, durationDays - 1);
+    } else if (durationSent && existing.duration_days) {
+      endDate = null;
+    } else {
+      endDate = existing.end_date;
+    }
+
+    // A decline pauses the medication (see reject()). Correcting and
+    // resubmitting it lifts that pause, so that once a doctor approves it the
+    // doses appear in the schedule; it still stays out until then.
+    let status = VALID_STATUS.includes(input.status) ? input.status : existing.status;
+    if (!VALID_STATUS.includes(input.status) && existing.approval_status === "rejected" && existing.status === "paused") {
+      status = "active";
+    }
 
     const result = await db.query(
       `UPDATE patient_medications
@@ -178,15 +204,16 @@ const PatientMedication = {
              times_of_day = $6::jsonb,
              start_date = $7,
              end_date = $8,
-             reminders_enabled = $9,
-             status = $10,
-             notes = $11,
+             duration_days = $9,
+             reminders_enabled = $10,
+             status = $11,
+             notes = $12,
              approval_status = 'pending',
              approved_by = NULL,
              approved_at = NULL,
              rejection_reason = NULL,
              updated_at = NOW()
-       WHERE medication_id = $12 AND patient_id = $13 AND deleted_at IS NULL
+       WHERE medication_id = $13 AND patient_id = $14 AND deleted_at IS NULL
        RETURNING ${SELECT_FIELDS}`,
       [
         drugName,
@@ -197,6 +224,7 @@ const PatientMedication = {
         JSON.stringify(times),
         startDate,
         endDate,
+        durationDays,
         input.reminders_enabled !== undefined ? Boolean(input.reminders_enabled) : existing.reminders_enabled,
         status,
         input.notes !== undefined ? cleanText(input.notes, 1000) : existing.notes,
@@ -290,29 +318,70 @@ const PatientMedication = {
   },
 
   // Record a dose outcome (taken/skipped). Upsert on (medication, date, time).
+  // A dose can be recorded only when it is one the daily schedule shows (see
+  // getScheduleForDate) and it is already due: the medication is the patient's
+  // own, approved by a doctor and active, the date is inside its start/end
+  // dates, the time is one of its reminder times, and that date + time is not
+  // in the future (Asia/Manila).
   async logDose(patientId, { medication_id, scheduled_date, scheduled_time, status, note }) {
     if (!["taken", "skipped", "pending", "missed"].includes(status)) {
       throw { statusCode: 400, message: "Invalid dose status." };
     }
     const day = cleanDate(scheduled_date);
-    const time = String(scheduled_time || "").trim();
-    if (!day || !/^\d{1,2}:\d{2}$/.test(time)) {
+    const timeMatch = String(scheduled_time || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!day || !isValidDateString(day) || !timeMatch) {
       throw { statusCode: 400, message: "Valid scheduled_date and scheduled_time are required." };
     }
-
-    // Ensure the medication belongs to this patient.
-    const owns = await db.query(
-      "SELECT 1 FROM patient_medications WHERE medication_id = $1 AND patient_id = $2 AND deleted_at IS NULL",
-      [medication_id, patientId]
-    );
-    if (owns.rowCount === 0) {
+    // Same "HH:MM" form the reminder times are stored in.
+    const time = `${timeMatch[1].padStart(2, "0")}:${timeMatch[2]}`;
+    if (!/^\d+$/.test(String(medication_id ?? "")) || Number(medication_id) > 2147483647) {
       throw { statusCode: 404, message: "Medication not found." };
     }
 
+    // The medication must belong to this patient.
+    const owned = await db.query(
+      `SELECT status, approval_status, times_of_day,
+              TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date,
+              TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date
+         FROM patient_medications
+        WHERE medication_id = $1 AND patient_id = $2 AND deleted_at IS NULL`,
+      [medication_id, patientId]
+    );
+    const med = owned.rows[0];
+    if (!med) {
+      throw { statusCode: 404, message: "Medication not found." };
+    }
+    if (med.approval_status !== "approved") {
+      throw {
+        statusCode: 400,
+        message: med.approval_status === "rejected"
+          ? "This medication was declined by a doctor, so doses can't be recorded for it."
+          : "This medication is still waiting for a doctor's review, so doses can't be recorded yet.",
+      };
+    }
+    if (med.status !== "active") {
+      throw { statusCode: 400, message: `This medication is ${med.status}, so doses can't be recorded for it.` };
+    }
+    if ((med.start_date && day < med.start_date) || (med.end_date && day > med.end_date)) {
+      throw { statusCode: 400, message: "That date is outside this medication's schedule." };
+    }
+    const times = Array.isArray(med.times_of_day) ? med.times_of_day : [];
+    if (!times.includes(time)) {
+      throw { statusCode: 400, message: "That time is not one of this medication's scheduled doses." };
+    }
+    // A dose that isn't due yet (clinic time, to the minute) can't be recorded
+    // as taken or skipped ahead of time.
+    if (`${day}T${time}` > manilaNowMinuteKey()) {
+      throw { statusCode: 400, message: "This dose isn't due yet. You can record it at or after its scheduled time." };
+    }
+
+    // $5 is cast explicitly: it is used both as the varchar `status` value and
+    // in a comparison, and Postgres rejects the statement ("inconsistent types
+    // deduced for parameter") when it has to guess two different types for it.
     const result = await db.query(
       `INSERT INTO medication_logs
          (medication_id, patient_id, scheduled_date, scheduled_time, status, taken_at, note)
-       VALUES ($1,$2,$3,$4,$5, CASE WHEN $5 = 'taken' THEN NOW() ELSE NULL END, $6)
+       VALUES ($1,$2,$3,$4,$5::varchar, CASE WHEN $5::varchar = 'taken' THEN NOW() ELSE NULL END, $6)
        ON CONFLICT (medication_id, scheduled_date, scheduled_time)
        DO UPDATE SET
          status = EXCLUDED.status,

@@ -20,6 +20,23 @@ export function manilaToday() {
   return `${v.year}-${v.month}-${v.day}`;
 }
 
+// "YYYY-MM-DDTHH:MM" of the clinic's current minute (24-hour clock), for
+// comparing with a scheduled date + time.
+export function manilaNowMinute() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: CLINIC_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const v = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${v.year}-${v.month}-${v.day}T${v.hour}:${v.minute}`;
+}
+
 // "YYYY-MM-DD" clinic day of a timestamp (Date or ISO string); "" if invalid.
 export function manilaDateOf(value) {
   if (!value) return "";
